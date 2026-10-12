@@ -35,7 +35,7 @@ const rg = C.makeRoom(m, out, 'Kamar', 0);
 ok(m.groups[rg].room.area > 10, 'ruang dibuat');
 const rows = C.rabRows(m);
 const by = Object.fromEntries(rows.map((x) => [x.key, x]));
-const bata = 14 * 3 - 0.9 * 2.1 - 1.2 * 1.2;
+const bata = 14 * 3 - 0.9 * 2.1 - 1.2 * 1.2 - 8 * 0.15 * 2.8 - 14 * 0.2; // dikurangi 8 kolom & ring balok
 ok(Math.abs(by['7.1.1.1'].vol - bata) < 0.02, 'luas bata ' + by['7.1.1.1'].vol + ' ~ ' + bata.toFixed(2));
 ok(by['7.5.2.1'].vol === 1 && by['7.5.3.1'].vol === 2, 'jumlah daun pintu/jendela');
 ok(Math.abs(by['7.5.1.1'].vol - (2 * 2.1 + 0.9 + 2 * 1.2 + 2 * 1.2)) < 0.02, 'panjang kusen');
@@ -125,9 +125,27 @@ for (const shape of ['L', 'U']) {
   ok(rk.sub === rows.reduce((a, r) => a + r.total, 0) && rk.total === rk.sub + rk.jasa + rk.ppn && rk.bulat % 1000 === 0, 'rekap: ' + rk.bulat.toLocaleString('id-ID') + ' — ' + rk.terbilang);
   const mt = C.materialTakeoff(m);
   const by = Object.fromEntries(mt.map((x) => [x.key, x]));
-  const bata = 14 * 3 - 0.9 * 2.1 - 1.2 * 1.2;
+  const bata = 14 * 3 - 0.9 * 2.1 - 1.2 * 1.2 - 8 * 0.15 * 2.8 - 14 * 0.2;
   ok(Math.abs(by.bata.qty - Math.ceil(bata * 70)) <= 1, 'bata ' + by.bata.qty + ' bh');
   ok(by.semen.qty > 0 && by.semen.unit === 'zak' && by.pasir.qty > 0, 'semen ' + by.semen.qty + ' zak, pasir ' + by.pasir.qty + ' m³');
   const sc = C.schedule(rows, 12);
   ok(Math.abs(sc.cum[11] - 100) < 1e-6 && sc.cum.every((v, i) => i === 0 || v >= sc.cum[i - 1] - 1e-9), 'kurva S naik ke 100%: ' + sc.cum.map((v) => v.toFixed(0)).join(' '));
+}
+// struktur & pembesian
+{
+  const sg = C.buildStructure(m, wg);
+  const st = m.groups[sg].struct;
+  ok(st.cols === 8 && st.ring === 14 && st.sloof === 14, 'struktur: ' + JSON.stringify(st));
+  const sids = [...new Set(m.faces.filter((f) => f.group === sg).map((f) => f.solid))];
+  ok(sids.length === 8 + 2 + 4, 'benda struktur: 8 kolom + ring + sloof + 4 pondasi = ' + sids.length);
+  // kolom tidak boleh berada di lubang pintu (x 1.55..2.45 di dinding selatan)
+  const colInDoor = sids.some((sid) => { const b = G.bboxOf(m, new Set(m.faces.filter((f) => f.solid === sid).map((f) => f.id))); const c = b.getCenter(new THREE.Vector3()); return b.max.z - b.min.z > 2 && Math.abs(c.y) < 0.1 && c.x > 1.56 && c.x < 2.44; });
+  ok(!colInDoor, 'kolom digeser keluar dari lubang pintu');
+  ok(C.buildStructure(m, wg) && Object.values(m.groups).filter((g) => g.struct).length === 1, 'bangun ulang mengganti struktur lama');
+  const bb = C.bbs(m);
+  const d10 = bb.perBar.find((x) => x.bar === 'D10');
+  const kol = 8 * 2.8 + 2 * 3; // kolom praktis (8 + 2 sekat?) - cukup cek > 0
+  ok(bb.totalKg > 100 && d10.batang > 10, 'pembesian total ' + bb.totalKg + ' kg, D10 ' + d10.batang + ' batang');
+  const mt = Object.fromEntries(C.materialTakeoff(m).map((x) => [x.key, x]));
+  ok(Math.abs(mt.besi.qty - bb.totalKg) < 0.02, 'besi bahan = total pembesian');
 }

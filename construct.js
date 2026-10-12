@@ -57,10 +57,27 @@ export function openingFrame(model, faceId, point, opt) {
   const t = wallThickness(model, face, point);
   if (!t || t > 0.6) return { error: 'Tebal dinding tidak terbaca' };
   const u = new THREE.Vector3(-n.y, n.x, 0);
-  const zs = face.pts.map((p) => p[2]);
-  const zmin = Math.min(...zs), zmax = Math.max(...zs);
-  const along = face.pts.map((p) => V(p).sub(point).dot(u));
-  const amin = Math.min(...along), amax = Math.max(...along);
+  // batas dari semua potongan bidang yang sebidang & bersambung (hasil CSG bisa memecah bidang)
+  const fn = V(face.n), d0 = V(face.pts[0]).dot(fn);
+  const cop = model.faces.filter((q) => q.solid === face.solid && V(q.n).dot(fn) > 0.999 && Math.abs(V(q.pts[0]).dot(fn) - d0) < 1e-4);
+  const ext = (f) => {
+    const al = f.pts.map((p) => V(p).sub(point).dot(u)), zz = f.pts.map((p) => p[2]);
+    return { a0: Math.min(...al), a1: Math.max(...al), z0: Math.min(...zz), z1: Math.max(...zz) };
+  };
+  const E = ext(face);
+  let grown = true;
+  while (grown) {
+    grown = false;
+    for (const q of cop) {
+      const e = ext(q);
+      if (e.a1 < E.a0 - 1e-4 || e.a0 > E.a1 + 1e-4 || e.z1 < E.z0 - 1e-4 || e.z0 > E.z1 + 1e-4) continue;
+      if (e.a0 < E.a0 - 1e-6 || e.a1 > E.a1 + 1e-6 || e.z0 < E.z0 - 1e-6 || e.z1 > E.z1 + 1e-6) {
+        E.a0 = Math.min(E.a0, e.a0); E.a1 = Math.max(E.a1, e.a1); E.z0 = Math.min(E.z0, e.z0); E.z1 = Math.max(E.z1, e.z1);
+        grown = true;
+      }
+    }
+  }
+  const zmin = E.z0, zmax = E.z1, amin = E.a0, amax = E.a1;
   const w = Math.min(opt.w, amax - amin - 0.1);
   if (w < 0.3) return { error: 'Dinding terlalu sempit' };
   let a = 0;
@@ -546,17 +563,17 @@ export function rabQuantities(model, opt = {}) {
       for (const s of sids) vol += solidVolume(model, s);
       const area = vol / g.wall.t;
       const L = g.wall.len;
-      add('7.1.1.1', area);
+      const nCols = columnPoints(g.wall).length;
+      // pasangan bata = luas dinding - bidang kolom praktis - ring balok (plester tetap seluruh bidang)
+      add('7.1.1.1', Math.max(0, area - nCols * 0.15 * (g.wall.h - 0.2) - L * 0.2));
       add('7.2.1.1', area * 2);
       add('7.2.1.2', area * 2);
       // dinding keliling tertutup: satu sisi dalam + satu sisi luar; sekat: dua sisi dalam
       add('7.3.1.1', g.wall.closed ? area : area * 2);
       if (g.wall.closed) add('7.3.1.2', area);
       add('6.8.1.2', L);
+      add('6.8.1.1', nCols * g.wall.h);
       const pts = g.wall.pts;
-      let cols = pts.length;
-      for (let i = 0; i < pts.length - (g.wall.closed ? 0 : 1); i++) cols += Math.floor(V(pts[i]).distanceTo(V(pts[(i + 1) % pts.length])) / 3);
-      add('6.8.1.1', cols * g.wall.h);
       const zb = pts[0] ? pts[0][2] : 0;
       if (Math.abs(zb - z0) < 0.1) {
         add('6.1.1.1', L * pond.w * pond.d);
@@ -713,10 +730,10 @@ export const KOEF = {
   '6.6.1.1': { batukali: 1.2, semen: 163, pasir: 0.52 },
   '6.2.1.1': { pasirurug: 1.2 },
   '6.9.1.1': beton('k100', 0.05),
-  '18.1.1.1': { ...beton('k225', 0.12), besi: 10, bendrat: 0.15 },
-  '6.8.1.1': { ...beton('k225', 0.0225), besi: 3.3, bendrat: 0.05 },
-  '6.8.1.2': { ...beton('k225', 0.03), besi: 3.4, bendrat: 0.05 },
-  sloof: { ...beton('k225', 0.03), besi: 3.4, bendrat: 0.05 },
+  '18.1.1.1': beton('k225', 0.12),
+  '6.8.1.1': beton('k225', 0.0225),
+  '6.8.1.2': beton('k225', 0.03),
+  sloof: beton('k225', 0.03),
   '6.3.1.3': { ...beton('k250', 1), besi: 80, bendrat: 1.2 },
   '7.4.1.1': { keramik: 1.05, semen: 10, pasir: 0.045, semenwarna: 1.5 },
   '7.4.1.2': { keramik: 1.05, semen: 9.8, pasir: 0.045, semenwarna: 1.3 },
@@ -731,6 +748,11 @@ export function materialTakeoff(model) {
     const k = KOEF[it.code];
     if (!k) continue;
     for (const [m, c] of Object.entries(k)) need[m] = (need[m] || 0) + c * it.vol;
+  }
+  const bb = bbs(model, q);
+  if (bb.totalKg > 0) {
+    need.besi = (need.besi || 0) + bb.totalKg;
+    need.bendrat = (need.bendrat || 0) + bb.totalKg * 0.015;
   }
   const prices = (model.rab && model.rab.matPrices) || {};
   return Object.keys(MATERIALS).filter((k) => need[k] > 1e-6).map((k) => {
@@ -774,4 +796,171 @@ export function schedule(rows, weeks) {
   const cum = [];
   plan.reduce((a, v, i) => (cum[i] = a + v), 0);
   return { weeks, cats, plan, cum };
+}
+
+
+// ---------- Struktur: kolom praktis, ring balok, sloof, pondasi ----------
+// Titik kolom: tiap sudut + tiap <= 3 m di sepanjang dinding (sama dengan hitungan RAB).
+export function columnPoints(w) {
+  const P = w.pts.map(V);
+  const segs = w.closed ? P.length : P.length - 1;
+  const out = P.map((p, i) => {
+    const q = P[(i + 1) % P.length], pr = P[(i - 1 + P.length) % P.length];
+    const d = (w.closed || i < P.length - 1 ? q.clone().sub(p) : p.clone().sub(pr)).setZ(0).normalize();
+    return { p, d };
+  });
+  for (let i = 0; i < segs; i++) {
+    const a = P[i], b = P[(i + 1) % P.length], L = a.distanceTo(b), k = Math.floor(L / 3);
+    const d = b.clone().sub(a).setZ(0).normalize();
+    for (let j = 1; j <= k; j++) out.push({ p: a.clone().lerp(b, j / (k + 1)), d });
+  }
+  return out;
+}
+function openingsOfWall(model, gid) {
+  const out = [];
+  for (const [k, g] of Object.entries(model.groups)) {
+    if (!g.opening?.frame || (g.parent ?? null) !== gid) continue;
+    const Mg = new THREE.Matrix4().fromArray(g.m);
+    out.push({ o: V(g.opening.frame.o).applyMatrix4(Mg), u: V(g.opening.frame.u).transformDirection(Mg), w: g.opening.w });
+  }
+  return out;
+}
+const CONC = '#a9abae', STONE = '#8d8377';
+export function buildStructure(model, wallGid, opt = {}) {
+  const g = model.groups[wallGid];
+  if (!g?.wall) return null;
+  const w = g.wall, b = 0.15, zb = w.pts[0][2], h = w.h;
+  // hapus struktur lama dinding ini
+  for (const [k, sg] of Object.entries(model.groups)) if (sg.struct?.wall === +wallGid) G.deleteIds(model, G.entitiesInTree(model, +k));
+  const start = model.nextId;
+  const ops = openingsOfWall(model, +wallGid);
+  const cols = columnPoints(w).map(({ p, d }) => {
+    // geser kolom keluar dari bukaan pintu/jendela ke samping kusen
+    for (const o of ops) {
+      const a = p.clone().sub(o.o).setZ(0).dot(o.u);
+      const off = p.clone().sub(o.o).setZ(0).addScaledVector(o.u, -a).length();
+      if (off < w.t && a > -b / 2 && a < o.w + b / 2) p = o.o.clone().setZ(p.z).addScaledVector(o.u, a < o.w / 2 ? -b / 2 : o.w + b / 2);
+    }
+    return { p, d };
+  });
+  for (const { p, d } of cols) {
+    const cm = { ...model, faces: [], nextId: model.nextId };
+    lbox(cm, 0, -b / 2, -b / 2, 0, b, b, h - 0.2, CONC);
+    G.applyMatrix(cm, new Set(cm.faces.map((f) => f.id)), new THREE.Matrix4().makeRotationZ(Math.atan2(d.y, d.x)).setPosition(p.x, p.y, zb));
+    model.nextId = cm.nextId;
+    model.faces.push(...cm.faces);
+  }
+  const band = (z, hh, color) => {
+    const fp = G.wallFootprint(w.pts.map((q) => [q[0], q[1], z]), w.t, w.closed);
+    if (!fp) return;
+    const f = G.makeFace(model, fp.pts, UP, color);
+    if (!f) return;
+    f.holes = fp.holes;
+    model.faces.push(f);
+    G.pushPull(model, f.id, hh);
+  };
+  band(zb + h - 0.2, 0.2, CONC); // ring balok
+  const ground = opt.ground ?? true;
+  let pondVol = 0;
+  if (ground) {
+    band(zb - 0.2, 0.2, CONC); // sloof
+    const pd = pondasiOf(model);
+    const P = w.pts.map(V), segs = w.closed ? P.length : P.length - 1;
+    const z1 = zb - 0.2, z0 = z1 - pd.h;
+    for (let i = 0; i < segs; i++) {
+      const a = P[i], c = P[(i + 1) % P.length], L = a.distanceTo(c);
+      const cm = { ...model, faces: [], nextId: model.nextId };
+      const ext = pd.bot / 2;
+      const f = G.makeFace(cm, [[-ext, -pd.bot / 2, 0], [-ext, pd.bot / 2, 0], [-ext, pd.top / 2, pd.h], [-ext, -pd.top / 2, pd.h]], new THREE.Vector3(1, 0, 0), STONE);
+      cm.faces.push(f);
+      G.pushPull(cm, f.id, L + 2 * ext);
+      const dd = c.clone().sub(a).setZ(0).normalize();
+      G.applyMatrix(cm, new Set(cm.faces.map((q) => q.id)), new THREE.Matrix4().makeRotationZ(Math.atan2(dd.y, dd.x)).setPosition(a.x, a.y, z0));
+      model.nextId = cm.nextId;
+      model.faces.push(...cm.faces);
+      pondVol += ((pd.top + pd.bot) / 2) * pd.h * L;
+    }
+  }
+  const ids = new Set(model.faces.filter((f) => f.id >= start).map((f) => f.id));
+  for (const f of model.faces) if (ids.has(f.id)) f.group = null;
+  const sg = G.makeGroup(model, ids, 'Struktur ' + (g.name || 'Dinding'), false, null);
+  model.groups[sg].struct = { colPts: cols.map(({ p, d }) => [+p.x.toFixed(4), +p.y.toFixed(4), +Math.atan2(d.y, d.x).toFixed(4)]), z: zb, wall: +wallGid, cols: cols.length, colH: +(h - 0.2).toFixed(3), ring: w.len, sloof: ground ? w.len : 0, pondasi: +pondVol.toFixed(3) };
+  if (opt.tag != null) model.groups[sg].tag = opt.tag;
+  return sg;
+}
+
+// ---------- Daftar pembesian (bar bending schedule) ----------
+export const BAR_KG = { 'Ø6': 0.222, 'Ø8': 0.395, D10: 0.617, D13: 1.042 };
+export function bbs(model, q = null) {
+  q ||= rabQuantities(model);
+  const v = (c) => (q[c] ? q[c].vol : 0);
+  const rows = [];
+  const add = (el, kode, bar, desc, len, waste) => {
+    if (!(len > 0)) return;
+    const tot = len * (1 + waste);
+    rows.push({ el, kode, bar, desc, len: +tot.toFixed(2), kg: +(tot * BAR_KG[bar]).toFixed(2), batang: Math.ceil(tot / 12) });
+  };
+  const kolom = v('6.8.1.1'), ring = v('6.8.1.2'), sloof = v('sloof'), dak = v('18.1.1.1');
+  // sengkang: keliling inti (selimut 2 cm) + 2 kait 5 cm, jarak 15 cm
+  add('Kolom praktis 15/15', 'K1', 'D10', 'Tulangan utama 4D10', kolom * 4, 0.1);
+  add('Kolom praktis 15/15', 'K1', 'Ø6', 'Sengkang Ø6-150 (0,54 m/bh)', (kolom / 0.15) * 0.54, 0.05);
+  add('Ring balok 15/20', 'RB', 'D10', 'Tulangan utama 4D10', ring * 4, 0.1);
+  add('Ring balok 15/20', 'RB', 'Ø6', 'Sengkang Ø6-150 (0,64 m/bh)', (ring / 0.15) * 0.64, 0.05);
+  add('Sloof 15/20', 'S1', 'D10', 'Tulangan utama 4D10', sloof * 4, 0.1);
+  add('Sloof 15/20', 'S1', 'Ø6', 'Sengkang Ø6-150 (0,64 m/bh)', (sloof / 0.15) * 0.64, 0.05);
+  add('Plat lantai 12 cm', 'PL', 'D10', 'Tulangan bawah D10-150 dua arah', dak * 13.33, 0.1);
+  add('Plat lantai 12 cm', 'PL', 'Ø8', 'Tulangan atas Ø8-200 dua arah', dak * 10, 0.1);
+  add('Tangga beton', 'TG', 'D10', 'Tulangan pelat tangga (±80 kg/m³)', (v('6.3.1.3') * 80) / BAR_KG.D10, 0);
+  const sum = {};
+  for (const r of rows) {
+    sum[r.bar] ||= { bar: r.bar, len: 0, kg: 0 };
+    sum[r.bar].len += r.len;
+    sum[r.bar].kg += r.kg;
+  }
+  const perBar = Object.values(sum).map((x) => ({ ...x, len: +x.len.toFixed(2), kg: +x.kg.toFixed(2), batang: Math.ceil(x.len / 12) }));
+  return { rows, perBar, totalKg: +perBar.reduce((a, x) => a + x.kg, 0).toFixed(2) };
+}
+
+// Irisan model dengan bidang sembarang n·p = c -> segmen 3D (untuk potongan)
+export function slicePlane(model, n, c, vis = null) {
+  const N = V(n).normalize();
+  const segs = [];
+  for (const f of model.faces) {
+    if (vis && !vis(f)) continue;
+    const nf = V(f.n);
+    if (Math.abs(nf.dot(N)) > 0.999) continue;
+    const dist = (p) => p[0] * N.x + p[1] * N.y + p[2] * N.z - c;
+    const ds = f.pts.map(dist);
+    if (Math.min(...ds) > 0 || Math.max(...ds) < 0) continue;
+    const d = nf.clone().cross(N).normalize();
+    const hits = [];
+    for (const loop of [f.pts, ...f.holes]) {
+      for (let i = 0; i < loop.length; i++) {
+        const a = loop[i], b = loop[(i + 1) % loop.length], da = dist(a), db = dist(b);
+        if (da * db > 0 || da === db) continue;
+        const t = da / (da - db);
+        hits.push(new THREE.Vector3(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t));
+      }
+    }
+    hits.sort((p, q) => p.dot(d) - q.dot(d));
+    for (let i = 0; i + 1 < hits.length; i += 2) segs.push([hits[i], hits[i + 1]]);
+  }
+  return segs;
+}
+// Kode kusen: P1, P2.. / J1, J2.. per ukuran
+export function openingSchedule(model) {
+  const types = [];
+  for (const [gid, g] of Object.entries(model.groups)) {
+    const o = g.opening;
+    if (!o) continue;
+    const key = `${o.type}|${o.w}|${o.h}|${o.sill}`;
+    let t = types.find((x) => x.key === key);
+    if (!t) types.push((t = { key, type: o.type, w: o.w, h: o.h, sill: o.sill, n: 0, gids: [] }));
+    t.n++;
+    t.gids.push(+gid);
+  }
+  types.sort((a, b) => (a.type === b.type ? b.w * b.h - a.w * a.h : a.type === 'pintu' ? -1 : 1));
+  let np = 0, nj = 0;
+  for (const t of types) t.code = t.type === 'pintu' ? 'P' + ++np : 'J' + ++nj;
+  return types;
 }

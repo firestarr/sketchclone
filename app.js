@@ -2136,6 +2136,24 @@ function placeMepTool(kind) {
     },
   });
 }
+function buildAllStructure() {
+  const walls = Object.entries(model.groups).filter(([, g]) => g.wall);
+  if (!walls.length) return toast('Belum ada dinding. Gambar dinding dengan alat Dinding dulu.');
+  let tag = model.tags.find((t) => t.name === 'Struktur');
+  if (!tag) { newTag('Struktur'); tag = model.tags[model.tags.length - 1]; }
+  const z0 = C.levelsOf(model)[0].z;
+  let n = 0;
+  for (const [gid, g] of walls) if (C.buildStructure(model, +gid, { ground: Math.abs(g.wall.pts[0][2] - z0) < 0.1, tag: tag.id }) != null) n++;
+  // hapus struktur yang dindingnya sudah tidak ada
+  for (const [k, sg] of Object.entries(model.groups)) if (sg.struct && !model.groups[sg.struct.wall]?.wall) G.deleteIds(model, G.entitiesInTree(model, +k));
+  changed();
+  toast(`Struktur dibuat untuk ${n} dinding: kolom praktis, ring balok, sloof & pondasi`);
+}
+function toggleStructView(on) {
+  for (const g of Object.values(model.groups)) if (g.wall || g.room) g.hidden = on;
+  snapCache = null;
+  changed();
+}
 function placeStairTool(opt = {}) {
   const sp = C.stairSpec(nextLevelHeight(), { shape: stairShape, ...opt });
   toast(`Tangga ${sp.n} anak tangga (optrede ${fmt(sp.R)}, antrede ${fmt(sp.T)}), panjang ${fmt(sp.n * sp.T)}. Klik kaki tangga; panah kiri/kanan memutar.`);
@@ -4624,17 +4642,18 @@ const sketch = {
   door(faceId, point, w, h) { return this.opening(faceId, point, 'pintu', w, h, 0); },
   window(faceId, point, w, h, sill) { return this.opening(faceId, point, 'jendela', w, h, sill); },
   wallFaceAt(x, y, z = 1) {
-    // bidang dinding tegak terdekat dari titik (x,y,z)
-    let best = null, bd = Infinity;
+    // bidang dinding tegak terdekat dari titik (x,y,z); proyeksi memakai jarak bertanda
+    const P = new THREE.Vector3(x, y, z);
+    let best = null, bd = Infinity, bp = null;
     for (const f of model.faces) {
       if (Math.abs(f.n[2]) > 0.1 || f.solid == null) continue;
-      const d = Math.abs((x - f.pts[0][0]) * f.n[0] + (y - f.pts[0][1]) * f.n[1]);
-      const bx = new THREE.Box3().setFromPoints(f.pts.map(V3)).expandByScalar(0.05);
-      if (d < bd && bx.containsPoint(new THREE.Vector3(x, y, z).addScaledVector(V3(f.n), -d))) { bd = d; best = f; }
+      const n = V3(f.n), sd = P.clone().sub(V3(f.pts[0])).dot(n);
+      if (Math.abs(sd) >= bd) continue;
+      const q = P.clone().addScaledVector(n, -sd);
+      const bx = new THREE.Box3().setFromPoints(f.pts.map(V3)).expandByScalar(0.01);
+      if (bx.containsPoint(q)) { bd = Math.abs(sd); best = f; bp = q; }
     }
-    if (!best) return null;
-    const pt = new THREE.Vector3(x, y, z).addScaledVector(V3(best.n), -((x - best.pts[0][0]) * best.n[0] + (y - best.pts[0][1]) * best.n[1]));
-    return { id: best.id, point: [pt.x, pt.y, pt.z] };
+    return best ? { id: best.id, point: [bp.x, bp.y, bp.z] } : null;
   },
   room(x, y, name = 'Ruang') {
     const z = curLevel().z;
@@ -5488,6 +5507,7 @@ async function exportDrawing() {
   const name = filePath ? filePath.split(/[\\/]/).pop().replace(/\.skc$/, '') : 'Tanpa Judul';
   const date = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
   const plans = planSheets(vis);
+  const more = model.groups && Object.values(model.groups).some((g) => g.wall) ? [...elevSheets(vis, G.bboxOf(model, null, vis)), ...sectionSheets(vis, G.bboxOf(model, null, vis))] : [];
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>
     @page { size: A3 landscape; margin: 0; }
     html, body { margin: 0; font-family: "Segoe UI", Arial, sans-serif; color: #111; }
@@ -5504,7 +5524,14 @@ async function exportDrawing() {
     .brand { position: absolute; left: 12mm; bottom: 13mm; font-size: 3mm; color: #555; }
     .plan { position: absolute; left: 12mm; top: 12mm; width: 396mm; height: 250mm; }
     .plan img, .plan svg { position: absolute; inset: 0; width: 100%; height: 100%; }
-    .plan .cut { stroke: #111; stroke-width: 5; stroke-linecap: square; }
+    .plan .cut, .cell .cut { stroke: #111; stroke-width: 5; stroke-linecap: square; }
+    .grid.g2 { grid-template-columns: 1fr; grid-template-rows: 1fr; } .cell2 { display: grid; grid-template-columns: 1fr 1fr; gap: 3mm; height: 100%; } .cell2 .cell { height: 100%; }
+    .lvl line { stroke: #2b6cb0; stroke-width: 1.5; stroke-dasharray: 10 6; } .lvl path { fill: #2b6cb0; } .lvl text { fill: #2b6cb0; font-size: 20px; font-weight: 700; } .lvl text.nm { font-size: 15px; font-weight: 400; }
+    .gnd { stroke: #6b4f2a; stroke-width: 4; }
+    .plan .col { fill: #111; } .plan .otag rect { fill: #fff; stroke: #7a3e9d; stroke-width: 2; } .plan .otag text { fill: #7a3e9d; font-size: 15px; font-weight: 700; }
+    .plan .secl line { stroke: #2b6cb0; stroke-width: 2; stroke-dasharray: 22 6 4 6; } .plan .secl circle { fill: #fff; stroke: #2b6cb0; stroke-width: 2.5; } .plan .secl text { fill: #2b6cb0; font-size: 18px; font-weight: 700; }
+    .ktab { position: absolute; right: 2mm; top: 2mm; background: #fff; font-size: 2.8mm; border: 0.3mm solid #555; padding: 1.5mm 2mm; }
+    .ktab table { border-collapse: collapse; margin-top: 1mm; } .ktab td, .ktab th { border: 0.2mm solid #999; padding: 0.6mm 1.6mm; text-align: center; }
     .plan .mep circle { fill: #fff; stroke: #1f5fa8; stroke-width: 2; } .plan .mep path { stroke: #1f5fa8; stroke-width: 2; } .plan .mep text { fill: #1f5fa8; font-size: 12px; font-weight: 700; }
     .plan .leaf { stroke: #111; stroke-width: 3; } .plan .swing { stroke: #555; stroke-width: 1.5; fill: none; stroke-dasharray: 8 5; }
     .plan .rn { font-size: 22px; font-weight: 700; fill: #1d2b3a; } .plan .ra { font-size: 19px; fill: #44515f; }
@@ -5512,7 +5539,10 @@ async function exportDrawing() {
   </style></head><body><div class="sheet"><div class="frame"></div><div class="grid">${cells.join('')}</div>
     <div class="title"><div>PROYEK<b>${escHtml(name)}</b></div><div>TANGGAL<b>${escHtml(date)}</b></div><div>SATUAN / SKALA<b>${escHtml(unitOf().u)} · 1:${N}</b></div></div>
     <div class="brand">Dibuat dengan SketchClone · ukuran keseluruhan ${escHtml(fmt(size.x))} × ${escHtml(fmt(size.y))} × ${escHtml(fmt(size.z))}</div>
-  </div>${plans.map((pl) => `<div class="sheet" style="page-break-before:always"><div class="frame"></div>
+  </div>${more.map((pl) => `<div class="sheet" style="page-break-before:always"><div class="frame"></div>
+    <div class="grid${pl.title === 'POTONGAN' ? ' g2' : ''}">${pl.grid}</div>
+    <div class="title"><div>${escHtml(pl.title)}<b>${escHtml(name)}</b></div><div>TANGGAL<b>${escHtml(date)}</b></div><div>${pl.k3}<b>${escHtml(pl.area)}</b></div></div>
+    <div class="brand">Dibuat dengan SketchClone · SKALA 1:${pl.N}</div></div>`).join('')}${plans.map((pl) => `<div class="sheet" style="page-break-before:always"><div class="frame"></div>
     <div class="plan">${pl.body}</div>
     <div class="title"><div>${escHtml(pl.title)}<b>${escHtml(name)}</b></div><div>TANGGAL<b>${escHtml(date)}</b></div><div>LUAS LANTAI<b>${escHtml(pl.area)}</b></div></div>
     <div class="brand">Dibuat dengan SketchClone · SKALA 1:${pl.N}</div></div>`).join('')}</body></html>`;
@@ -5578,10 +5608,59 @@ function planSheets(vis) {
       const lab = model.labels.find((l) => l.id === g.room.label);
       const c = lab ? lab.p : [box.min.x, box.min.y, lv.z];
       const [x, y] = sp(c[0], c[1], lv.z);
-      return `<text class="rn" x="${x}" y="${y - 4}" text-anchor="middle">${escHtml(g.room.name)}</text><text class="ra" x="${x}" y="${y + 20}" text-anchor="middle">${g.room.area.toFixed(2)} m²</text>`;
+      return `<text class="rn" x="${x}" y="${y - 30}" text-anchor="middle">${escHtml(g.room.name)}</text><text class="ra" x="${x}" y="${y - 8}" text-anchor="middle">${g.room.area.toFixed(2)} m²</text>`;
     }).join('');
     const [l, b] = sp(box.min.x, box.min.y, lv.z), [r, t] = sp(box.max.x, box.max.y, lv.z);
-    const y = b + 46, x = l - 46;
+    const y = b + 96, x = l - 96;
+    // kolom praktis (kotak hitam)
+    let extra = '';
+    for (const g of Object.values(model.groups)) {
+      if (!g.struct?.colPts || Math.abs(g.struct.z - lv.z) > 0.1) continue;
+      for (const [cx, cy, ang] of g.struct.colPts) {
+        const pts4 = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, c]) => {
+          const lx = (a * 0.075), ly = (c * 0.075);
+          return sp(cx + lx * Math.cos(ang) - ly * Math.sin(ang), cy + lx * Math.sin(ang) + ly * Math.cos(ang), cutZ);
+        });
+        extra += `<polygon class="col" points="${pts4.map((q) => q.map((v) => v.toFixed(1)).join(',')).join(' ')}"/>`;
+      }
+    }
+    // kode kusen di dekat bukaan
+    const sch = C.openingSchedule(model);
+    for (const tp of sch) for (const gid of tp.gids) {
+      const g = model.groups[gid];
+      if (!g?.opening?.frame || !ids.has([...G.entitiesInTree(model, gid)][0])) continue;
+      const Mg = new THREE.Matrix4().fromArray(g.m);
+      const o = V3(g.opening.frame.o).applyMatrix4(Mg), u = V3(g.opening.frame.u).transformDirection(Mg), d = V3(g.opening.frame.d).transformDirection(Mg);
+      const c = o.clone().addScaledVector(u, g.opening.w / 2).addScaledVector(d, g.opening.t + 0.4);
+      const [tx, ty] = sp(c.x, c.y, cutZ);
+      extra += `<g class="otag"><rect x="${(tx - 17).toFixed(1)}" y="${(ty - 11).toFixed(1)}" width="34" height="22" rx="4"/><text x="${tx.toFixed(1)}" y="${(ty + 6).toFixed(1)}" text-anchor="middle">${tp.code}</text></g>`;
+    }
+    // dimensi tiap segmen dinding keliling (di luar dinding)
+    for (const [, g] of walls) {
+      if (!g.wall.closed) continue;
+      const P = g.wall.pts;
+      const area2 = P.reduce((a, p, i) => { const q = P[(i + 1) % P.length]; return a + p[0] * q[1] - q[0] * p[1]; }, 0);
+      const sgn = area2 > 0 ? 1 : -1;
+      P.forEach((a, i) => {
+        const q = P[(i + 1) % P.length];
+        const dx = q[0] - a[0], dy = q[1] - a[1], L = Math.hypot(dx, dy);
+        if (L < 0.3) return;
+        const nx = (sgn * dy) / L, ny = (-sgn * dx) / L, off = g.wall.t / 2 + 0.45;
+        const A1 = sp(a[0] + nx * off, a[1] + ny * off, lv.z), B1 = sp(q[0] + nx * off, q[1] + ny * off, lv.z);
+        const mx = (A1[0] + B1[0]) / 2, my = (A1[1] + B1[1]) / 2, ang = (Math.atan2(B1[1] - A1[1], B1[0] - A1[0]) * 180) / Math.PI;
+        const ang2 = ang > 90 || ang < -90 ? ang + 180 : ang;
+        extra += `<g class="dim"><line x1="${A1[0].toFixed(1)}" y1="${A1[1].toFixed(1)}" x2="${B1[0].toFixed(1)}" y2="${B1[1].toFixed(1)}"/>${[A1, B1].map((E) => `<line x1="${(E[0] - 6).toFixed(1)}" y1="${(E[1] + 6).toFixed(1)}" x2="${(E[0] + 6).toFixed(1)}" y2="${(E[1] - 6).toFixed(1)}"/>`).join('')}<text x="${mx.toFixed(1)}" y="${my.toFixed(1)}" dy="-7" text-anchor="middle" font-size="18" transform="rotate(${ang2.toFixed(1)} ${mx.toFixed(1)} ${my.toFixed(1)})">${escHtml(fmt(L))}</text></g>`;
+      });
+    }
+    // garis potongan A-A & B-B (lantai dasar)
+    if (li === 0) {
+      const sec = sectionLines(box);
+      const mark = (P1, P2, lab) => `<g class="secl"><line x1="${P1[0]}" y1="${P1[1]}" x2="${P2[0]}" y2="${P2[1]}"/>${[P1, P2].map((E) => `<circle cx="${E[0]}" cy="${E[1]}" r="15"/><text x="${E[0]}" y="${E[1] + 6}" text-anchor="middle">${lab}</text>`).join('')}</g>`;
+      const yA = sp(box.min.x, sec.y, lv.z)[1], xB = sp(sec.x, box.min.y, lv.z)[0];
+      extra += mark([l - 150, yA], [r + 110, yA], 'A');
+      extra += mark([xB, t - 120], [xB, b + 150], 'B');
+    }
+    const kt = sch.length ? `<div class="ktab"><b>TABEL KUSEN</b><table><tr><th>Kode</th><th>Jenis</th><th>L × T</th><th>Ambang</th><th>Jml</th></tr>${sch.map((t) => `<tr><td>${t.code}</td><td>${t.type === 'pintu' ? 'Pintu' : 'Jendela'}</td><td>${fmt(t.w)} × ${fmt(t.h)}</td><td>${fmt(t.sill)}</td><td>${t.n}</td></tr>`).join('')}</table></div>` : '';
     const dims = `<g class="dim"><line x1="${l}" y1="${b + 8}" x2="${l}" y2="${y + 10}"/><line x1="${r}" y1="${b + 8}" x2="${r}" y2="${y + 10}"/><line x1="${l}" y1="${y}" x2="${r}" y2="${y}"/>
       <line x1="${l - 7}" y1="${y + 7}" x2="${l + 7}" y2="${y - 7}"/><line x1="${r - 7}" y1="${y + 7}" x2="${r + 7}" y2="${y - 7}"/>
       <text x="${(l + r) / 2}" y="${y - 10}" text-anchor="middle">${escHtml(fmt(size.x))}</text>
@@ -5590,10 +5669,71 @@ function planSheets(vis) {
       <text x="${x - 12}" y="${(t + b) / 2}" text-anchor="middle" transform="rotate(-90 ${x - 12} ${(t + b) / 2})">${escHtml(fmt(size.y))}</text></g>`;
     out.push({
       title: 'DENAH ' + lv.name.toUpperCase(), N, area: area ? area.toFixed(2) + ' m²' : '-',
-      body: `<img src="${data}"><svg viewBox="0 0 ${W} ${H}">${lines}${swings}${mepSyms}${rooms}${dims}</svg>`,
+      body: `<img src="${data}"><svg viewBox="0 0 ${W} ${H}">${lines}${extra}${swings}${mepSyms}${rooms}${dims}</svg>${kt}`,
     });
   });
   return out;
+}
+
+// Garis potongan melewati tengah bangunan, digeser bila jatuh tepat di dinding sekat.
+function sectionLines(box) {
+  const c = box.getCenter(new THREE.Vector3());
+  return { y: +(c.y + 0.37).toFixed(3), x: +(c.x - 0.43).toFixed(3) };
+}
+function levelMarks(cam, W, H, box, side = 'right') {
+  const sp = (x, y, z) => { const v = new THREE.Vector3(x, y, z).project(cam); return [((v.x + 1) / 2) * W, ((1 - v.y) / 2) * H]; };
+  const zs = [...C.levelsOf(model).map((l) => [l.z, l.name]), [box.max.z, 'Puncak atap']];
+  const seen = new Set();
+  let g = '';
+  const c = box.getCenter(new THREE.Vector3());
+  for (const [z, nm] of zs) {
+    const key = z.toFixed(2);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const [, yy] = sp(c.x, c.y, z);
+    const xs = [sp(box.min.x, box.min.y, z)[0], sp(box.max.x, box.max.y, z)[0], sp(box.min.x, box.max.y, z)[0], sp(box.max.x, box.min.y, z)[0]];
+    const x1 = Math.max(...xs) + 30;
+    g += `<g class="lvl"><line x1="${Math.min(...xs) - 20}" y1="${yy}" x2="${x1 + 70}" y2="${yy}"/><path d="M${x1} ${yy}l-9 -14h18z"/><text x="${x1 + 14}" y="${yy - 6}">${z >= 0 ? (z === 0 ? '±' : '+') : ''}${z.toFixed(2)}</text><text x="${x1 + 14}" y="${yy + 18}" class="nm">${escHtml(nm)}</text></g>`;
+  }
+  return g;
+}
+function elevSheets(vis, box) {
+  const views = ['depan', 'belakang', 'kanan', 'kiri'];
+  const W = 1400, H = 860, size = box.getSize(new THREE.Vector3());
+  let px = Infinity;
+  for (const k of views) { const d = VIEWDEF[k]; px = Math.min(px, (W * 0.62) / Math.max(size.getComponent(d.h), 1e-3), (H * 0.66) / Math.max(size.z, 1e-3)); }
+  const nice = [20, 25, 50, 75, 100, 125, 150, 200, 250, 500, 1000];
+  const N = nice.find((n) => n >= 1000 / (px * (200 / W))) || 1000;
+  px = 1000 / (N * (200 / W));
+  const cells = views.map((k) => {
+    const { data, cam } = renderView(k, W, H, px, box);
+    return `<div class="cell"><img src="${data}"><svg viewBox="0 0 ${W} ${H}">${levelMarks(cam, W, H, box)}</svg><div class="cap">${VIEWDEF[k].label} · SKALA 1:${N}</div></div>`;
+  });
+  return [{ title: 'TAMPAK', N, k3: 'TINGGI BANGUNAN', area: fmt(size.z), grid: cells.join('') }];
+}
+function sectionSheets(vis, box) {
+  if (!Object.values(model.groups).some((g) => g.wall)) return [];
+  const sec = sectionLines(box);
+  const W = 1400, H = 860, size = box.getSize(new THREE.Vector3());
+  let px = Math.min((W * 0.62) / Math.max(size.x, size.y, 1e-3), (H * 0.66) / Math.max(size.z, 1e-3));
+  const nice = [20, 25, 50, 75, 100, 125, 150, 200, 250, 500, 1000];
+  const N = nice.find((n) => n >= 1000 / (px * (200 / W))) || 1000;
+  px = 1000 / (N * (200 / W));
+  const defs = [
+    { label: 'POTONGAN A-A', view: 'depan', n: [0, 1, 0], c: sec.y, clip: new THREE.Plane(new THREE.Vector3(0, 1, 0), -sec.y) },
+    { label: 'POTONGAN B-B', view: 'kanan', n: [1, 0, 0], c: sec.x, clip: new THREE.Plane(new THREE.Vector3(-1, 0, 0), sec.x) },
+  ];
+  const cells = defs.map((d) => {
+    const { data, cam } = renderView(d.view, W, H, px, box, [d.clip]);
+    const sp = (v) => { const q = v.clone().project(cam); return [((q.x + 1) / 2) * W, ((1 - q.y) / 2) * H]; };
+    const segs = C.slicePlane(model, d.n, d.c, vis);
+    const cut = segs.map(([a, b]) => { const p = sp(a), q = sp(b); return `<line class="cut" x1="${p[0].toFixed(1)}" y1="${p[1].toFixed(1)}" x2="${q[0].toFixed(1)}" y2="${q[1].toFixed(1)}"/>`; }).join('');
+    // tanah asli
+    const [gx0, gy] = sp(new THREE.Vector3(box.min.x - 1, box.min.y - 1, 0)), [gx1] = sp(new THREE.Vector3(box.max.x + 1, box.max.y + 1, 0));
+    const ground = `<line class="gnd" x1="${Math.min(gx0, gx1) - 40}" y1="${gy}" x2="${Math.max(gx0, gx1) + 40}" y2="${gy}"/>`;
+    return `<div class="cell"><img src="${data}"><svg viewBox="0 0 ${W} ${H}">${ground}${cut}${levelMarks(cam, W, H, box)}</svg><div class="cap">${d.label} · SKALA 1:${N}</div></div>`;
+  });
+  return [{ title: 'POTONGAN', N, k3: 'GARIS POTONG', area: 'lihat denah', grid: `<div class="cell2">${cells.join('')}</div>` }];
 }
 
 // ---- RAB otomatis (format RAB_Bangunan) ----
@@ -5653,7 +5793,15 @@ function rabExtraSheets(rows) {
   const kurva = [['JADWAL PELAKSANAAN & KURVA S'], [], ['No', 'Uraian Pekerjaan', 'Biaya (Rp)', 'Bobot (%)', ...wk],
     ...sc.cats.map((c, i) => [i + 1, c.cat, Math.round(c.cost), r2(c.weight), ...c.per.map((v) => (v ? r2(v) : ''))]), [],
     ['', 'Rencana mingguan (%)', '', 100, ...sc.plan.map(r2)], ['', 'Kumulatif (%)', '', '', ...sc.cum.map(r2)]];
+  const bb = C.bbs(model);
+  const besi = [['DAFTAR PEMBESIAN (BAR BENDING SCHEDULE)'], [], ['No', 'Elemen', 'Kode', 'Diameter', 'Uraian', 'Panjang Total (m)', 'Berat (kg)', 'Batang 12 m'],
+    ...bb.rows.map((r, i) => [i + 1, r.el, r.kode, r.bar, r.desc, r.len, r.kg, r.batang]), [], ['', 'REKAP PER DIAMETER'],
+    ...bb.perBar.map((x) => ['', x.bar, '', '', '', x.len, x.kg, x.batang]), ['', 'TOTAL', '', '', '', '', bb.totalKg, '']];
+  const sch = C.openingSchedule(model);
+  const kusen = [['DAFTAR KUSEN PINTU & JENDELA'], [], ['Kode', 'Jenis', 'Lebar (m)', 'Tinggi (m)', 'Tinggi ambang (m)', 'Jumlah'], ...sch.map((t) => [t.code, t.type === 'pintu' ? 'Pintu panel kayu' : 'Jendela kaca', t.w, t.h, t.sill, t.n])];
   return [
+    { name: 'Pembesian', rows: besi, bold: new Set([0, 2, besi.length - 1]), widths: [5, 22, 7, 9, 34, 15, 12, 12] },
+    { name: 'Kusen', rows: kusen, bold: new Set([0, 2]), widths: [8, 20, 11, 11, 16, 9] },
     { name: 'Rekapitulasi', rows: rekapRows, bold: new Set([0, 4, 7 + n0, 11 + n0, 12 + n0]), widths: [6, 46, 20] },
     { name: 'Kebutuhan Bahan', rows: bahan, bold: new Set([0, 2, bahan.length - 1]), widths: [6, 30, 12, 9, 14, 16] },
     { name: 'Kurva S', rows: kurva, bold: new Set([0, 2, kurva.length - 2, kurva.length - 1]), widths: [5, 26, 15, 10, ...wk.map(() => 7)] },
@@ -5694,6 +5842,7 @@ async function exportRabPdf(toFile = true) {
   <tr class="tot"><td colspan="2">TOTAL (DIBULATKAN)</td><td class="n">Rp ${rp(rk.bulat)}</td></tr></table>
   <div class="tb">Terbilang: ${escHtml(rk.terbilang)}</div>
   ${mt.length ? `<h3>Kebutuhan bahan pokok (perkiraan, koefisien SNI)</h3><table><tr><th>No</th><th>Bahan</th><th>Jumlah</th><th>Harga Satuan (Rp)</th><th>Total (Rp)</th></tr>${mt.map((b, i) => `<tr><td class="c">${i + 1}</td><td>${escHtml(b.name)}</td><td class="n">${rp(b.qty)} ${escHtml(b.unit)}</td><td class="n">${rp(b.price)}</td><td class="n">${rp(b.total)}</td></tr>`).join('')}</table>` : ''}
+  ${(() => { const bb = C.bbs(model); return bb.rows.length ? `<h3>Daftar pembesian</h3><table><tr><th>Elemen</th><th>Uraian</th><th>Panjang (m)</th><th>Berat (kg)</th><th>Batang 12 m</th></tr>${bb.rows.map((r) => `<tr><td>${escHtml(r.el)}</td><td>${escHtml(r.desc)}</td><td class="n">${rp(r.len)}</td><td class="n">${rp(r.kg)}</td><td class="n">${r.batang}</td></tr>`).join('')}${bb.perBar.map((x) => `<tr class="cat"><td colspan="2">Total ${x.bar}</td><td class="n">${rp(x.len)}</td><td class="n">${rp(x.kg)}</td><td class="n">${x.batang}</td></tr>`).join('')}</table>` : ''; })()}
   <div class="sign"><div>${escHtml(pj.location !== '-' ? pj.location + ', ' : '')}${escHtml(date)}<br>Dibuat oleh,<div class="ln"></div></div></div></div>
   <div class="page">${head('JADWAL PELAKSANAAN & KURVA S (' + sc.weeks + ' minggu)')}
   ${kurvaSvg(sc, 720, 330, true)}
@@ -5726,6 +5875,19 @@ function renderKonsPane() {
     mkEl('button', { textContent: 'Hanya lantai aktif', disabled: L.length < 2, onclick: () => { L.forEach((lv, i) => { const t = model.tags.find((x) => x.id === lv.tag); if (t) t.visible = i === (model.activeLevel || 0); }); snapCache = null; changed(); } }),
     mkEl('button', { textContent: 'Semua', disabled: L.length < 2, onclick: () => { L.forEach((lv) => { const t = model.tags.find((x) => x.id === lv.tag); if (t) t.visible = true; }); snapCache = null; changed(); } }),
   ));
+  P.append(mkEl('div', { className: 'ttl', textContent: 'Struktur' }));
+  const nStruct = Object.values(model.groups).filter((g) => g.struct).length;
+  const structOnly = Object.values(model.groups).some((g) => g.wall && g.hidden);
+  P.append(mkEl('div', { className: 'btnrow' },
+    mkEl('button', { textContent: nStruct ? 'Perbarui struktur' : 'Buat struktur', title: 'Kolom praktis tiap sudut & tiap 3 m (digeser dari kusen), ring balok, sloof, pondasi batu kali', onclick: buildAllStructure }),
+    mkEl('button', { textContent: structOnly ? 'Tampilkan dinding' : 'Lihat struktur saja', disabled: !nStruct, onclick: () => toggleStructView(!structOnly) }),
+  ));
+  {
+    const bb = C.bbs(model);
+    if (bb.rows.length) {
+      P.append(mkEl('div', { className: 'muted small', textContent: 'Pembesian (besi 12 m): ' + bb.perBar.map((x) => `${x.bar} ${x.batang} btg (${x.kg.toLocaleString('id-ID')} kg)`).join(' · ') + ` · total ${bb.totalKg.toLocaleString('id-ID')} kg` }));
+    }
+  }
   P.append(mkEl('div', { className: 'ttl', textContent: 'Listrik & Sanitasi' }));
   P.append(mkEl('div', { className: 'mepgrid' }, ...Object.entries(C.MEP).map(([k, it]) => {
     const cnt = Object.values(model.groups).filter((g) => g.mep?.kind === k).length;
@@ -6252,6 +6414,111 @@ const TEMPLATES = {
   lanskap: { units: { u: 'm', prec: 1 }, style: { bg: 'realsky', edges: false, smooth: 30 } },
   karakter: { units: { u: 'cm', prec: 1 }, style: { bg: 'studio', edges: false, smooth: 30, ao: true } },
 };
+// ======================= Template rumah siap pakai =======================
+// Denah dibagi zona sepanjang Y (depan -> belakang); tiap zona dibelah sekat x = W/2 menjadi kiri & kanan.
+const HOUSES = {
+  t36: { label: 'Rumah Tipe 36', W: 6, zones: [3, 3], left: ['Ruang Tamu', 'Dapur'], right: ['Kamar Tidur 1', 'Kamar Tidur 2'], km: true },
+  t45: { label: 'Rumah Tipe 45', W: 6, zones: [3, 3, 1.5], left: ['Ruang Tamu', 'Ruang Keluarga', 'Dapur'], right: ['Kamar Tidur 1', 'Kamar Tidur 2', 'Kamar Mandi'], kmRight: true },
+  t54: { label: 'Rumah Tipe 54', W: 6, zones: [3, 3, 3], left: ['Ruang Tamu', 'Ruang Keluarga', 'Dapur'], right: ['Kamar Tidur 1', 'Kamar Tidur 2', 'Kamar Tidur 3'], km: true },
+  lt2: {
+    label: 'Rumah 2 Lantai', W: 6, zones: [3, 3.5, 1.5], left: ['Ruang Tamu', 'Ruang Keluarga', 'Dapur'], right: ['Kamar Tidur 1', 'Ruang Makan', 'Kamar Mandi'], kmRight: true,
+    stair: { x: 0.65, y: 3.2, shape: 'U' },
+    up: { zones: [3, 5], left: ['Ruang Kerja', 'Ruang Santai'], right: ['Kamar Tidur 2', 'Kamar Tidur 3'] },
+  },
+};
+function buildHouse(key) {
+  const S = HOUSES[key];
+  newFromTemplate('arsitektur');
+  const sk = sketch, H = 2.8, t = 0.15, W = S.W, D = S.zones.reduce((a, b) => a + b, 0), xm = W / 2, e = t / 2;
+  model.rab = { project: { name: S.label } };
+  C.levelsOf(model)[0].h = H;
+  const face = (x, y, z) => sk.wallFaceAt(x, y, z + 1);
+  const door = (x, y, z, w = 0.8, h = 2.1) => { const f = face(x, y, z); if (f) try { sk.door(f.id, f.point, w, h); } catch {} };
+  const win = (x, y, z, w = 1.2, h = 1.2, sill = 0.9) => { const f = face(x, y, z); if (f) try { sk.window(f.id, f.point, w, h, sill); } catch {} };
+  const mep = (k, x, y, z, n) => { try { sk.mep(k, x, y, z, n); } catch {} };
+  const floorPlan = (zones, left, right, z, opt = {}) => {
+    sk.wall([[0, 0, z], [W, 0, z], [W, D, z], [0, D, z]], t, H, true);
+    sk.wall([[xm, e, z], [xm, D - e, z]], t, H, false);
+    const ys = [0];
+    zones.forEach((d) => ys.push(ys[ys.length - 1] + d));
+    for (let i = 1; i < zones.length; i++) sk.wall([[e, ys[i], z], [W - e, ys[i], z]], t, H, false);
+    const kmCorner = opt.km;
+    const yk = D - 1.5;
+    if (kmCorner) {
+      sk.wall([[1.5, yk, z], [1.5, D - e, z]], t, H, false);
+      sk.wall([[e, yk, z], [1.5, yk, z]], t, H, false);
+    }
+    // pintu & jendela
+    if (opt.ground) door(0.9, 0, z, 0.9, 2.1);
+    if (!opt.ground) win(1.5, 0, z);
+    win(opt.ground ? 2.25 : 1.5, 0, z, opt.ground ? 0.9 : 1.2);
+    for (let i = 0; i < zones.length; i++) {
+      const yc = (ys[i] + ys[i + 1]) / 2;
+      const rightIsKm = /Mandi/.test(right[i]);
+      door(xm, Math.min(ys[i + 1] - 0.6, yc + 0.4), z, rightIsKm ? 0.7 : 0.8, 2.1);
+      if (i > 0) door(opt.doorX ?? 1.0, ys[i], z, 0.9, 2.1);
+      if (rightIsKm) win(W, yc, z, 0.5, 0.5, 1.6);
+      else win(W, yc, z);
+      if (i > 0 && !(kmCorner && i === zones.length - 1)) win(0, yc, z);
+    }
+    if (kmCorner) { door(0.75, yk, z, 0.7, 2.1); win(0.75, D, z, 0.5, 0.5, 1.6); }
+    win(kmCorner ? 2.25 : 1.5, D, z, kmCorner ? 0.9 : 1.2);
+    if (!/Mandi/.test(right[right.length - 1])) win(xm + 1.5, D, z);
+    // ruang
+    for (let i = 0; i < zones.length; i++) {
+      const y0 = ys[i], y1 = ys[i + 1];
+      try { sk.room(1.0, kmCorner && i === zones.length - 1 ? y0 + 0.5 : (y0 + y1) / 2 - 0.35, left[i]); } catch {}
+      try { sk.room(xm + 1.5, (y0 + y1) / 2 - 0.35, right[i]); } catch {}
+      mep('lampu', 1.5, (y0 + y1) / 2, z);
+      mep('lampu', xm + 1.5, (y0 + y1) / 2, z);
+      mep('stopkontak', xm - e, y0 + 0.5, z, [-1, 0, 0]);
+      if (!/Mandi/.test(right[i])) mep('stopkontak', xm + e, y0 + 0.5, z, [1, 0, 0]);
+    }
+    if (kmCorner) {
+      try { sk.room(0.75, D - 0.75, 'Kamar Mandi'); } catch {}
+      mep('lampu', 0.75, D - 0.75, z);
+      mep('kloset', 0.55, D - e, z, [0, -1, 0]);
+      mep('kran', 1.2, D - e, z, [0, -1, 0]);
+      mep('floordrain', 1.05, D - 1.0, z);
+    }
+    if (/Mandi/.test(right[right.length - 1])) {
+      mep('kloset', xm + 0.5, D - e, z, [0, -1, 0]);
+      mep('kran', xm + 1.2, D - e, z, [0, -1, 0]);
+      mep('wastafel', W - 0.6, ys[ys.length - 2] + e, z, [0, 1, 0]);
+      mep('floordrain', xm + 1.6, D - 0.6, z);
+    }
+    return ys;
+  };
+  floorPlan(S.zones, S.left, S.right, 0, { ground: true, km: S.km, doorX: S.stair ? 2.4 : 1.0 });
+  // rumah 2 lantai: lantai atas & tangga
+  if (S.up) {
+    sk.level('Lantai 2', H, H);
+    model.activeLevel = 1;
+    floorPlan(S.up.zones, S.up.left, S.up.right, H, {});
+    model.activeLevel = 0;
+    sk.stairs(S.stair.x, S.stair.y, 0, 0.9, S.stair.shape);
+  }
+  // dapur, panel, utilitas luar
+  mep('wastafel', S.km ? 2.3 : 1.2, D - e, 0, [0, -1, 0]);
+  mep('panel', 2.5, e, 0, [0, 1, 0]);
+  mep('septictank', 1.5, D + 1.0, 0);
+  mep('tandon', W - 1.0, D + 0.8, 0);
+  // atap di atas dinding lantai teratas
+  const topZ = S.up ? H : 0;
+  const sids = [...new Set(model.faces.filter((f) => { const g = model.groups[f.group]; return g?.wall && Math.abs(g.wall.pts[0][2] - topZ) < 0.1; }).map((f) => f.solid))];
+  sk.roof(sids, 30, 0.6);
+  buildAllStructure();
+  model.activeLevel = 0;
+  setStdView('iso');
+  zoomExtents();
+  changed();
+  const rk = C.rekap(model, C.rabRows(model));
+  showTray('kons');
+  toast(`${S.label} (${W}×${D} m) siap · RAB ± Rp ${rk.bulat.toLocaleString('id-ID')} — ubah sesuka hati, RAB ikut menyesuaikan`);
+  return rk;
+}
+document.querySelectorAll('#tplDlg [data-house]').forEach((b) => (b.onclick = () => buildHouse(b.dataset.house)));
+
 function newFromTemplate(name) {
   const t = TEMPLATES[name] || TEMPLATES.arsitektur;
   const m = G.newModel();
@@ -6319,7 +6586,7 @@ window.__sk = {
   setSelection: (ids) => { selection = new Set(ids); refresh(); updateInfo(); },
   type: (t) => { vcbText = t; tool.onVCB && tool.onVCB(vcbText); vcbText = ''; renderVCB(); },
   key: (k) => window.dispatchEvent(new KeyboardEvent('keydown', { key: k })),
-  undo, redo, loadModel, setShadows, solidOp, runScript, sketch, textures, setMat, getCurMat: () => curMat, pluginCommands, applyArray, getLastArray: () => lastArray, C, exportRabPdf, kurvaSvg, rabExtraSheets, placeStairTool, placeMepTool, setStairShape: (v) => (stairShape = v), exportRab, renderKonsPane, addLevel, curLevel, planSheets, roomSliceZ, loadOnlineLib, placeOnline, insertModelAsComponent, exportSelectionComponent, getOnlineLib: () => onlineLib, exportWebViewer, shareToPhone, viewerHtml, runAi, openAi, aiContext, openVersions, newFromTemplate, openKeys, saveKeys, keyTools, recordVideo, sky, exportDrawing, bomData, exportBom, exportDXF, intersectSel, roofSel, showGrips, gripState: () => gripState, fastIds: () => fastIds, openDeform, applyDeform, tessellateSel, mirrorLinked, splinePoints, subdivideSel, roundAllSel, mirrorSel, importReference, filletSel, fitTexture, texMapper, editTexture, exportPNG, serializeProject, applyProjectData, startPlace, LIBRARY, insertLibrary, getFont, textShapes, buildText3D, confirmText3D, getPlaceGen: () => placeGen, boxSelect, openCtx, zoomSelection, fmt, parseNums, eyePos, walkBy, turnView, importMesh, exportGLB, addScene, goScene, showTray, hideSelection, unhideAll, cmd: handleMenu, enterEdit, exitEdit, editGroup: () => editGroup, sunState, styleOf, setStyle, refresh,
+  undo, redo, loadModel, setShadows, solidOp, runScript, sketch, textures, setMat, getCurMat: () => curMat, pluginCommands, applyArray, getLastArray: () => lastArray, C, buildHouse, HOUSES, buildAllStructure, toggleStructView, elevSheets, sectionSheets, exportRabPdf, kurvaSvg, rabExtraSheets, placeStairTool, placeMepTool, setStairShape: (v) => (stairShape = v), exportRab, renderKonsPane, addLevel, curLevel, planSheets, roomSliceZ, loadOnlineLib, placeOnline, insertModelAsComponent, exportSelectionComponent, getOnlineLib: () => onlineLib, exportWebViewer, shareToPhone, viewerHtml, runAi, openAi, aiContext, openVersions, newFromTemplate, openKeys, saveKeys, keyTools, recordVideo, sky, exportDrawing, bomData, exportBom, exportDXF, intersectSel, roofSel, showGrips, gripState: () => gripState, fastIds: () => fastIds, openDeform, applyDeform, tessellateSel, mirrorLinked, splinePoints, subdivideSel, roundAllSel, mirrorSel, importReference, filletSel, fitTexture, texMapper, editTexture, exportPNG, serializeProject, applyProjectData, startPlace, LIBRARY, insertLibrary, getFont, textShapes, buildText3D, confirmText3D, getPlaceGen: () => placeGen, boxSelect, openCtx, zoomSelection, fmt, parseNums, eyePos, walkBy, turnView, importMesh, exportGLB, addScene, goScene, showTray, hideSelection, unhideAll, cmd: handleMenu, enterEdit, exitEdit, editGroup: () => editGroup, sunState, styleOf, setStyle, refresh,
   mouse(type, x, y, z, extra = {}) {
     const p = this.project(x, y, z);
     if (!p) return;
