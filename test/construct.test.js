@@ -115,3 +115,19 @@ for (const shape of ['L', 'U']) {
   const rr = Object.fromEntries(C.rabRows(m5).map((x) => [x.key, x]));
   ok(rr['8.1.1.1'].vol === 1 && rr['8.1.1.2'].vol === 1 && rr['17.3.1.1'].vol === 1 && rr['8.3.1.1'] && rr['8.4.1.1'] && rr['17.2.1.2'], 'RAB utilitas');
 }
+// rekap, terbilang, bahan, kurva S
+{
+  ok(C.terbilang(1250000) === 'satu juta dua ratus lima puluh ribu', 'terbilang 1.250.000: ' + C.terbilang(1250000));
+  ok(C.terbilang(211315) === 'dua ratus sebelas ribu tiga ratus lima belas', 'terbilang 211.315');
+  ok(C.terbilang(1001000000) === 'satu miliar satu juta', 'terbilang 1.001.000.000: ' + C.terbilang(1001000000));
+  const rows = C.rabRows(m);
+  const rk = C.rekap(m, rows);
+  ok(rk.sub === rows.reduce((a, r) => a + r.total, 0) && rk.total === rk.sub + rk.jasa + rk.ppn && rk.bulat % 1000 === 0, 'rekap: ' + rk.bulat.toLocaleString('id-ID') + ' — ' + rk.terbilang);
+  const mt = C.materialTakeoff(m);
+  const by = Object.fromEntries(mt.map((x) => [x.key, x]));
+  const bata = 14 * 3 - 0.9 * 2.1 - 1.2 * 1.2;
+  ok(Math.abs(by.bata.qty - Math.ceil(bata * 70)) <= 1, 'bata ' + by.bata.qty + ' bh');
+  ok(by.semen.qty > 0 && by.semen.unit === 'zak' && by.pasir.qty > 0, 'semen ' + by.semen.qty + ' zak, pasir ' + by.pasir.qty + ' m³');
+  const sc = C.schedule(rows, 12);
+  ok(Math.abs(sc.cum[11] - 100) < 1e-6 && sc.cum.every((v, i) => i === 0 || v >= sc.cum[i - 1] - 1e-9), 'kurva S naik ke 100%: ' + sc.cum.map((v) => v.toFixed(0)).join(' '));
+}

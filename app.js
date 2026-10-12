@@ -5609,10 +5609,99 @@ async function exportRab(toFile = true) {
   const { data, grand } = C.rabSheet(model, rows, rabProject());
   const bold = new Set([0, 6, data.length - 1]);
   data.forEach((r, i) => { if (r.length === 12 && r[1] === '' && i > 6) bold.add(i); });
-  const bytes = xlsx([{ name: 'RAB', rows: data, bold, widths: [6, 22, 42, 11, 10, 8, 14, 15, 15, 13, 17, 10] }, { name: 'Harga AHSP', rows: [['Kode', 'Jenis Pekerjaan', 'Satuan', 'Harga Satuan', 'Material', 'Tenaga', 'Alat', 'Kategori'], ...C.AHSP.map((a) => [a.code, a.name, a.unit, (model.rab?.prices || {})[a.code] ?? a.price, a.mat, a.lab, a.eq, a.sub])] }]);
+  const bytes = xlsx([{ name: 'RAB', rows: data, bold, widths: [6, 22, 42, 11, 10, 8, 14, 15, 15, 13, 17, 10] }, ...rabExtraSheets(rows), { name: 'Harga AHSP', rows: [['Kode', 'Jenis Pekerjaan', 'Satuan', 'Harga Satuan', 'Material', 'Tenaga', 'Alat', 'Kategori'], ...C.AHSP.map((a) => [a.code, a.name, a.unit, (model.rab?.prices || {})[a.code] ?? a.price, a.mat, a.lab, a.eq, a.sub])] }]);
   if (!toFile) return { bytes: bytes.length, rows, grand, data };
   const out = await window.api.exportBinary('xlsx', bytes, rabProject().name + ' - RAB.xlsx');
   out && toast('RAB disimpan · total Rp ' + grand.toLocaleString('id-ID'));
+}
+
+const rabWeeks = () => (model.rab && model.rab.weeks) || 16;
+// Diagram batang bobot mingguan + garis kumulatif (Kurva S)
+function kurvaSvg(sc, W, H, big = false) {
+  const pl = big ? 46 : 26, pr = 8, pt = 10, pb = big ? 30 : 18;
+  const iw = W - pl - pr, ih = H - pt - pb, n = sc.weeks;
+  const bw = iw / n, maxBar = Math.max(...sc.plan, 1);
+  const fs = big ? 12 : 8;
+  let g = '';
+  for (let k = 0; k <= 4; k++) {
+    const y = pt + ih - (ih * k) / 4;
+    g += `<line x1="${pl}" y1="${y}" x2="${W - pr}" y2="${y}" stroke="#e3e7ec"/><text x="${pl - 3}" y="${y + fs / 3}" font-size="${fs}" text-anchor="end" fill="#667">${k * 25}%</text>`;
+  }
+  sc.plan.forEach((v, i) => {
+    const h = (v / maxBar) * ih * 0.45;
+    g += `<rect x="${(pl + i * bw + bw * 0.15).toFixed(1)}" y="${(pt + ih - h).toFixed(1)}" width="${(bw * 0.7).toFixed(1)}" height="${h.toFixed(1)}" fill="#9cc0ea"/>`;
+  });
+  const pts = [[pl, pt + ih], ...sc.cum.map((v, i) => [pl + (i + 1) * bw, pt + ih - (v / 100) * ih])];
+  g += `<polyline points="${pts.map((p) => p.map((x) => x.toFixed(1)).join(',')).join(' ')}" fill="none" stroke="#c0392b" stroke-width="${big ? 2.5 : 1.8}"/>`;
+  const step = Math.ceil(n / (big ? 26 : 8));
+  for (let i = 0; i < n; i += step) g += `<text x="${(pl + (i + 0.5) * bw).toFixed(1)}" y="${H - pb + fs + 3}" font-size="${fs}" text-anchor="middle" fill="#667">${i + 1}</text>`;
+  if (big) g += `<text x="${pl + iw / 2}" y="${H - 4}" font-size="12" text-anchor="middle" fill="#445">Minggu ke-</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" xmlns="http://www.w3.org/2000/svg">${g}</svg>`;
+}
+function rabExtraSheets(rows) {
+  const rk = C.rekap(model, rows);
+  const rekapRows = [['REKAPITULASI RENCANA ANGGARAN BIAYA'], ['Nama Proyek:', rabProject().name], ['Lokasi:', rabProject().location], [],
+    ['No', 'Uraian Pekerjaan', 'Jumlah Biaya (Rp)'], ...rk.cats.map((c, i) => [i + 1, c.cat, c.total]), [],
+    ['', 'JUMLAH', rk.sub], ['', `Jasa kontraktor ${rk.jasaPct}%`, rk.jasa], ['', 'JUMLAH + JASA', rk.dpp], ['', `PPN ${rk.ppnPct}%`, rk.ppn],
+    ['', 'TOTAL', rk.total], ['', 'DIBULATKAN', rk.bulat], ['', 'Terbilang: ' + rk.terbilang]];
+  const n0 = rk.cats.length;
+  const mt = C.materialTakeoff(model);
+  const bahan = [['KEBUTUHAN BAHAN POKOK (perkiraan, koefisien SNI)'], [], ['No', 'Bahan', 'Jumlah', 'Satuan', 'Harga Satuan', 'Total'], ...mt.map((b, i) => [i + 1, b.name, b.qty, b.unit, b.price, b.total]), [], ['', 'TOTAL', '', '', '', mt.reduce((a, b) => a + b.total, 0)]];
+  const sc = C.schedule(rows, rabWeeks());
+  const wk = [...Array(sc.weeks)].map((_, i) => 'M' + (i + 1));
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const kurva = [['JADWAL PELAKSANAAN & KURVA S'], [], ['No', 'Uraian Pekerjaan', 'Biaya (Rp)', 'Bobot (%)', ...wk],
+    ...sc.cats.map((c, i) => [i + 1, c.cat, Math.round(c.cost), r2(c.weight), ...c.per.map((v) => (v ? r2(v) : ''))]), [],
+    ['', 'Rencana mingguan (%)', '', 100, ...sc.plan.map(r2)], ['', 'Kumulatif (%)', '', '', ...sc.cum.map(r2)]];
+  return [
+    { name: 'Rekapitulasi', rows: rekapRows, bold: new Set([0, 4, 7 + n0, 11 + n0, 12 + n0]), widths: [6, 46, 20] },
+    { name: 'Kebutuhan Bahan', rows: bahan, bold: new Set([0, 2, bahan.length - 1]), widths: [6, 30, 12, 9, 14, 16] },
+    { name: 'Kurva S', rows: kurva, bold: new Set([0, 2, kurva.length - 2, kurva.length - 1]), widths: [5, 26, 15, 10, ...wk.map(() => 7)] },
+  ];
+}
+async function exportRabPdf(toFile = true) {
+  const rows = C.rabRows(model);
+  if (!rows.length) return toast('Belum ada pekerjaan untuk dihitung.');
+  const pj = rabProject();
+  const rk = C.rekap(model, rows);
+  const mt = C.materialTakeoff(model);
+  const sc = C.schedule(rows, rabWeeks());
+  const rp = (v) => v.toLocaleString('id-ID');
+  const date = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+  let body = '', no = 1, cat = null;
+  for (const r of rows) {
+    if (r.cat !== cat) { cat = r.cat; body += `<tr class="cat"><td colspan="7">${escHtml(cat)}</td></tr>`; }
+    body += `<tr><td class="c">${no++}</td><td>${escHtml(r.name)}</td><td class="c">${r.code}</td><td class="n">${rp(r.vol)}</td><td class="c">${escHtml(r.unit)}</td><td class="n">${rp(r.price)}</td><td class="n">${rp(r.total)}</td></tr>`;
+  }
+  const head = (t) => `<div class="hd"><h1>${t}</h1><div>${[pj.name, pj.location !== '-' ? pj.location : '', date].filter(Boolean).map(escHtml).join(' · ')}</div></div>`;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+    @page { size: A4 portrait; margin: 14mm 12mm; }
+    body { font-family: "Segoe UI", Arial, sans-serif; font-size: 9.5pt; color: #111; }
+    .hd { border-bottom: 0.6mm solid #111; margin-bottom: 4mm; padding-bottom: 2mm; } .hd h1 { font-size: 14pt; margin: 0 0 1mm; } .hd div { color: #444; }
+    table { width: 100%; border-collapse: collapse; } th, td { border: 0.2mm solid #999; padding: 1.2mm 1.6mm; vertical-align: top; }
+    th { background: #e9eef4; } tr.cat td { background: #f4f6f8; font-weight: 700; } .n { text-align: right; white-space: nowrap; } .c { text-align: center; }
+    tr.tot td { font-weight: 700; border-top: 0.5mm solid #111; } .page { page-break-before: always; } .tb { margin-top: 3mm; font-style: italic; }
+    .sign { margin-top: 14mm; display: flex; justify-content: flex-end; } .sign div { width: 60mm; text-align: center; } .sign .ln { margin-top: 22mm; border-top: 0.3mm solid #111; }
+  </style></head><body>
+  ${head('RENCANA ANGGARAN BIAYA (RAB)')}
+  <table><tr><th>No</th><th>Jenis Pekerjaan</th><th>Kode</th><th>Volume</th><th>Sat.</th><th>Harga Satuan (Rp)</th><th>Jumlah (Rp)</th></tr>${body}
+  <tr class="tot"><td colspan="6">JUMLAH</td><td class="n">${rp(rk.sub)}</td></tr></table>
+  <div class="page">${head('REKAPITULASI')}
+  <table><tr><th>No</th><th>Uraian Pekerjaan</th><th>Jumlah (Rp)</th></tr>${rk.cats.map((c, i) => `<tr><td class="c">${i + 1}</td><td>${escHtml(c.cat)}</td><td class="n">${rp(c.total)}</td></tr>`).join('')}
+  <tr class="tot"><td colspan="2">JUMLAH</td><td class="n">${rp(rk.sub)}</td></tr>
+  <tr><td colspan="2">Jasa kontraktor ${rk.jasaPct}%</td><td class="n">${rp(rk.jasa)}</td></tr>
+  <tr><td colspan="2">PPN ${rk.ppnPct}%</td><td class="n">${rp(rk.ppn)}</td></tr>
+  <tr class="tot"><td colspan="2">TOTAL (DIBULATKAN)</td><td class="n">Rp ${rp(rk.bulat)}</td></tr></table>
+  <div class="tb">Terbilang: ${escHtml(rk.terbilang)}</div>
+  ${mt.length ? `<h3>Kebutuhan bahan pokok (perkiraan, koefisien SNI)</h3><table><tr><th>No</th><th>Bahan</th><th>Jumlah</th><th>Harga Satuan (Rp)</th><th>Total (Rp)</th></tr>${mt.map((b, i) => `<tr><td class="c">${i + 1}</td><td>${escHtml(b.name)}</td><td class="n">${rp(b.qty)} ${escHtml(b.unit)}</td><td class="n">${rp(b.price)}</td><td class="n">${rp(b.total)}</td></tr>`).join('')}</table>` : ''}
+  <div class="sign"><div>${escHtml(pj.location !== '-' ? pj.location + ', ' : '')}${escHtml(date)}<br>Dibuat oleh,<div class="ln"></div></div></div></div>
+  <div class="page">${head('JADWAL PELAKSANAAN & KURVA S (' + sc.weeks + ' minggu)')}
+  ${kurvaSvg(sc, 720, 330, true)}
+  <table style="margin-top:4mm"><tr><th>No</th><th>Uraian Pekerjaan</th><th>Bobot (%)</th><th>Minggu</th></tr>${sc.cats.map((c, i) => `<tr><td class="c">${i + 1}</td><td>${escHtml(c.cat)}</td><td class="n">${c.weight.toLocaleString('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td class="c">${c.w0 + 1} – ${c.w1}</td></tr>`).join('')}</table></div>
+  </body></html>`;
+  if (!toFile) return { html, rk, mt, sc };
+  const out = await window.api.savePdf(html, pj.name + ' - Laporan RAB.pdf', { pageSize: 'A4', landscape: false, margins: true });
+  out && toast('Laporan RAB (PDF) disimpan · total Rp ' + rp(rk.bulat));
 }
 
 function renderKonsPane() {
@@ -5700,9 +5789,39 @@ function renderKonsPane() {
       mkEl('td', { className: 'num', textContent: r.total.toLocaleString('id-ID') }),
     ));
   }
-  tb.append(mkEl('tr', { className: 'tot' }, mkEl('td', { colSpan: 2, textContent: 'TOTAL' }), mkEl('td', { className: 'num', textContent: 'Rp ' + grand.toLocaleString('id-ID') })));
+  tb.append(mkEl('tr', { className: 'tot' }, mkEl('td', { colSpan: 2, textContent: 'JUMLAH' }), mkEl('td', { className: 'num', textContent: 'Rp ' + grand.toLocaleString('id-ID') })));
   P.append(tb);
+  // rekapitulasi
+  const rk = C.rekap(model, rows);
+  const setRk = (k) => (e) => { model.rab.rekap = { ...(model.rab.rekap || {}), [k]: Math.max(0, +e.target.value || 0) }; changed(); };
+  const rp = (v) => 'Rp ' + v.toLocaleString('id-ID');
+  P.append(mkEl('div', { className: 'msec', textContent: 'Rekapitulasi' }));
+  P.append(mkEl('table', { className: 'rab rekap' },
+    mkEl('tr', {}, mkEl('td', { textContent: 'Jumlah biaya pekerjaan' }), mkEl('td', { className: 'num', textContent: rp(rk.sub) })),
+    mkEl('tr', {}, mkEl('td', {}, 'Jasa kontraktor ', mkEl('input', { type: 'number', min: 0, max: 50, step: 1, value: rk.jasaPct, onchange: setRk('jasa') }), ' %'), mkEl('td', { className: 'num', textContent: rp(rk.jasa) })),
+    mkEl('tr', {}, mkEl('td', {}, 'PPN ', mkEl('input', { type: 'number', min: 0, max: 20, step: 1, value: rk.ppnPct, onchange: setRk('ppn') }), ' %'), mkEl('td', { className: 'num', textContent: rp(rk.ppn) })),
+    mkEl('tr', { className: 'tot' }, mkEl('td', { textContent: 'TOTAL (dibulatkan)' }), mkEl('td', { className: 'num', textContent: rp(rk.bulat) })),
+  ));
+  P.append(mkEl('div', { className: 'small terbilang', textContent: 'Terbilang: ' + rk.terbilang }));
+  // kebutuhan bahan
+  const mt = C.materialTakeoff(model);
+  if (mt.length) {
+    model.rab.matPrices ||= {};
+    P.append(mkEl('div', { className: 'msec', textContent: 'Kebutuhan bahan pokok (koefisien SNI)' }));
+    P.append(mkEl('table', { className: 'rab' },
+      mkEl('tr', {}, ...['Bahan', 'Jumlah', 'Harga (Rp)'].map((h) => mkEl('th', { textContent: h }))),
+      ...mt.map((b) => mkEl('tr', {},
+        mkEl('td', { textContent: b.name }),
+        mkEl('td', { className: 'num', textContent: `${b.qty.toLocaleString('id-ID')} ${b.unit}` }),
+        mkEl('td', {}, mkEl('input', { type: 'number', min: 0, step: 500, value: b.price, title: 'Harga satuan bahan', onchange: (e) => { model.rab.matPrices[b.key] = Math.max(0, +e.target.value || 0); changed(); } }))))));
+    P.append(mkEl('div', { className: 'muted small', textContent: `Perkiraan belanja bahan pokok: ${rp(mt.reduce((a, b) => a + b.total, 0))}. Harga dari daftar material RAB_Bangunan.` }));
+  }
+  // jadwal & kurva S
+  P.append(mkEl('div', { className: 'msec', textContent: 'Jadwal & Kurva S' }));
+  P.append(trow('Durasi (minggu)', mkEl('input', { type: 'number', min: 2, max: 104, step: 1, value: rabWeeks(), onchange: (e) => { model.rab.weeks = Math.max(2, Math.min(104, Math.round(+e.target.value) || 16)); changed(); } })));
+  P.append(mkEl('div', { className: 'kurva', innerHTML: kurvaSvg(C.schedule(rows, rabWeeks()), 250, 150) }));
   P.append(mkEl('div', { className: 'btnrow' },
+    mkEl('button', { textContent: 'Laporan RAB (PDF)', onclick: () => exportRabPdf() }),
     mkEl('button', { textContent: 'Ekspor RAB (Excel)', onclick: () => exportRab() }),
     mkEl('button', { textContent: 'Harga default', title: 'Kembalikan semua harga ke AHSP', onclick: () => { model.rab.prices = {}; changed(); } }),
   ));
@@ -5782,7 +5901,7 @@ function bomData() {
 }
 function xlsx(sheets) {
   const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
-  const col = (i) => String.fromCharCode(65 + i);
+  const col = (i) => (i >= 26 ? String.fromCharCode(64 + Math.floor(i / 26)) : '') + String.fromCharCode(65 + (i % 26));
   const sheetXml = (rows, bold = new Set([0]), widths = null) => {
     const nc = Math.max(...rows.map((r) => r.length));
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols>${[...Array(nc)].map((_, i) => `<col min="${i + 1}" max="${i + 1}" width="${widths ? widths[i] || 14 : i === 0 ? 34 : 22}" customWidth="1"/>`).join('')}</cols><sheetData>${rows
@@ -5983,6 +6102,7 @@ const handleMenu = async (cmd, arg) => {
     case 'sharePhone': await shareToPhone(); break;
     case 'exportBom': await exportBom(); break;
     case 'exportRab': await exportRab(); break;
+    case 'exportRabPdf': await exportRabPdf(); break;
     case 'kons': showTray('kons'); break;
     case 'exportDxf': {
       const base = filePath ? filePath.split(/[\\/]/).pop().replace(/\.skc$/, '') : 'model';
@@ -6199,7 +6319,7 @@ window.__sk = {
   setSelection: (ids) => { selection = new Set(ids); refresh(); updateInfo(); },
   type: (t) => { vcbText = t; tool.onVCB && tool.onVCB(vcbText); vcbText = ''; renderVCB(); },
   key: (k) => window.dispatchEvent(new KeyboardEvent('keydown', { key: k })),
-  undo, redo, loadModel, setShadows, solidOp, runScript, sketch, textures, setMat, getCurMat: () => curMat, pluginCommands, applyArray, getLastArray: () => lastArray, C, placeStairTool, placeMepTool, setStairShape: (v) => (stairShape = v), exportRab, renderKonsPane, addLevel, curLevel, planSheets, roomSliceZ, loadOnlineLib, placeOnline, insertModelAsComponent, exportSelectionComponent, getOnlineLib: () => onlineLib, exportWebViewer, shareToPhone, viewerHtml, runAi, openAi, aiContext, openVersions, newFromTemplate, openKeys, saveKeys, keyTools, recordVideo, sky, exportDrawing, bomData, exportBom, exportDXF, intersectSel, roofSel, showGrips, gripState: () => gripState, fastIds: () => fastIds, openDeform, applyDeform, tessellateSel, mirrorLinked, splinePoints, subdivideSel, roundAllSel, mirrorSel, importReference, filletSel, fitTexture, texMapper, editTexture, exportPNG, serializeProject, applyProjectData, startPlace, LIBRARY, insertLibrary, getFont, textShapes, buildText3D, confirmText3D, getPlaceGen: () => placeGen, boxSelect, openCtx, zoomSelection, fmt, parseNums, eyePos, walkBy, turnView, importMesh, exportGLB, addScene, goScene, showTray, hideSelection, unhideAll, cmd: handleMenu, enterEdit, exitEdit, editGroup: () => editGroup, sunState, styleOf, setStyle, refresh,
+  undo, redo, loadModel, setShadows, solidOp, runScript, sketch, textures, setMat, getCurMat: () => curMat, pluginCommands, applyArray, getLastArray: () => lastArray, C, exportRabPdf, kurvaSvg, rabExtraSheets, placeStairTool, placeMepTool, setStairShape: (v) => (stairShape = v), exportRab, renderKonsPane, addLevel, curLevel, planSheets, roomSliceZ, loadOnlineLib, placeOnline, insertModelAsComponent, exportSelectionComponent, getOnlineLib: () => onlineLib, exportWebViewer, shareToPhone, viewerHtml, runAi, openAi, aiContext, openVersions, newFromTemplate, openKeys, saveKeys, keyTools, recordVideo, sky, exportDrawing, bomData, exportBom, exportDXF, intersectSel, roofSel, showGrips, gripState: () => gripState, fastIds: () => fastIds, openDeform, applyDeform, tessellateSel, mirrorLinked, splinePoints, subdivideSel, roundAllSel, mirrorSel, importReference, filletSel, fitTexture, texMapper, editTexture, exportPNG, serializeProject, applyProjectData, startPlace, LIBRARY, insertLibrary, getFont, textShapes, buildText3D, confirmText3D, getPlaceGen: () => placeGen, boxSelect, openCtx, zoomSelection, fmt, parseNums, eyePos, walkBy, turnView, importMesh, exportGLB, addScene, goScene, showTray, hideSelection, unhideAll, cmd: handleMenu, enterEdit, exitEdit, editGroup: () => editGroup, sunState, styleOf, setStyle, refresh,
   mouse(type, x, y, z, extra = {}) {
     const p = this.project(x, y, z);
     if (!p) return;

@@ -7,7 +7,7 @@ contextBridge.exposeInMainWorld('api', {
   exportFile: (ext, data, name) => ipcRenderer.invoke('file:export', ext, data, name),
   exportBinary: (ext, data, name) => ipcRenderer.invoke('file:exportBinary', ext, data, name),
   importFile: () => ipcRenderer.invoke('file:import'),
-  savePdf: (html, name) => ipcRenderer.invoke('pdf:save', html, name),
+  savePdf: (html, name, opts) => ipcRenderer.invoke('pdf:save', html, name, opts),
   aiGenerate: (req) => ipcRenderer.invoke('ai:generate', req),
   shareStart: (html, glb) => ipcRenderer.invoke('share:start', html, glb),
   shareStop: () => ipcRenderer.invoke('share:stop'),

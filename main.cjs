@@ -64,6 +64,7 @@ function buildMenu() {
         { label: 'Ekspor Gambar Kerja (PDF)...', accelerator: 'CmdOrCtrl+P', click: () => send('exportPdf') },
         { label: 'Laporan Daftar Bahan (Excel)...', click: () => send('exportBom') },
         { label: 'RAB Otomatis (Excel)...', click: () => send('exportRab') },
+        { label: 'Laporan RAB (PDF)...', click: () => send('exportRabPdf') },
         { label: 'Ekspor DXF (AutoCAD)...', click: () => send('exportDxf') },
         { label: 'Ekspor STL...', click: () => send('exportStl') },
         { type: 'separator' },
@@ -534,7 +535,7 @@ ipcMain.handle('file:exportBinary', async (_e, ext, data, name) => {
   return r.filePath;
 });
 
-ipcMain.handle('pdf:save', async (_e, html, name) => {
+ipcMain.handle('pdf:save', async (_e, html, name, opts = {}) => {
   // mode uji: tulis langsung tanpa dialog
   const r = process.env.SK_TEST && process.env.SK_PDF_OUT
     ? { canceled: false, filePath: process.env.SK_PDF_OUT }
@@ -545,7 +546,7 @@ ipcMain.handle('pdf:save', async (_e, html, name) => {
   const pw = new BrowserWindow({ show: false, webPreferences: { javascript: false } });
   try {
     await pw.loadFile(tmp);
-    const pdf = await pw.webContents.printToPDF({ pageSize: 'A3', landscape: true, printBackground: true, margins: { marginType: 'none' } });
+    const pdf = await pw.webContents.printToPDF({ pageSize: opts.pageSize || 'A3', landscape: opts.landscape ?? true, printBackground: true, margins: { marginType: opts.margins ? 'default' : 'none' }, preferCSSPageSize: !!opts.margins });
     fs.writeFileSync(r.filePath, pdf);
     return r.filePath;
   } finally {

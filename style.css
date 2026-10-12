@@ -171,3 +171,6 @@ table.rab input { width: 72px; font-size: 11px; }
 #tray .mepgrid button { display: flex; align-items: center; gap: 5px; text-align: left; font-size: 11px; padding: 4px 5px; }
 #tray .mepgrid .ic { font-size: 15px; width: 18px; text-align: center; }
 #tray select.stshape { width: auto; max-width: 140px; }
+table.rab.rekap input { width: 44px; }
+#tray .terbilang { font-style: italic; color: #334; margin: 2px 0 6px; }
+#tray .kurva { border: 1px solid #e3e7ec; border-radius: 4px; padding: 2px; background: #fff; }

@@ -652,3 +652,126 @@ export function rabSheet(model, rows, project = {}) {
   data.push(['', '', '', '', '', '', '', '', '', 'TOTAL KESELURUHAN', grand, '']);
   return { data, grand };
 }
+
+
+// ---------- Rekapitulasi, jasa & PPN ----------
+const SATUAN = ['', 'satu', 'dua', 'tiga', 'empat', 'lima', 'enam', 'tujuh', 'delapan', 'sembilan', 'sepuluh', 'sebelas'];
+export function terbilang(n) {
+  n = Math.floor(Math.abs(n));
+  if (n < 12) return SATUAN[n];
+  if (n < 20) return terbilang(n - 10) + ' belas';
+  if (n < 100) return terbilang(Math.floor(n / 10)) + ' puluh' + (n % 10 ? ' ' + terbilang(n % 10) : '');
+  if (n < 200) return 'seratus' + (n > 100 ? ' ' + terbilang(n - 100) : '');
+  if (n < 1000) return terbilang(Math.floor(n / 100)) + ' ratus' + (n % 100 ? ' ' + terbilang(n % 100) : '');
+  if (n < 2000) return 'seribu' + (n > 1000 ? ' ' + terbilang(n - 1000) : '');
+  const big = [[1e12, 'triliun'], [1e9, 'miliar'], [1e6, 'juta'], [1e3, 'ribu']];
+  for (const [v, w] of big) if (n >= v) return terbilang(Math.floor(n / v)) + ' ' + w + (n % v ? ' ' + terbilang(n % v) : '');
+  return '';
+}
+export const REKAP_DEFAULT = { jasa: 10, ppn: 11 };
+export function rekap(model, rows) {
+  const o = { ...REKAP_DEFAULT, ...((model.rab && model.rab.rekap) || {}) };
+  const cats = [];
+  for (const r of rows) {
+    let c = cats.find((x) => x.cat === r.cat);
+    if (!c) cats.push((c = { cat: r.cat, total: 0 }));
+    c.total += r.total;
+  }
+  const sub = cats.reduce((a, c) => a + c.total, 0);
+  const jasa = Math.round((sub * o.jasa) / 100);
+  const dpp = sub + jasa;
+  const ppn = Math.round((dpp * o.ppn) / 100);
+  const total = dpp + ppn;
+  const bulat = Math.ceil(total / 1000) * 1000;
+  const words = terbilang(bulat);
+  return { cats, sub, jasaPct: o.jasa, jasa, dpp, ppnPct: o.ppn, ppn, total, bulat, terbilang: words.charAt(0).toUpperCase() + words.slice(1) + ' rupiah' };
+}
+
+// ---------- Kebutuhan bahan (koefisien SNI) ----------
+// Harga bahan dari daftar material RAB_Bangunan (MaterialSeeder); bahan tanpa harga di sana bernilai 0 dan bisa diisi.
+export const MATERIALS = {
+  semen: { name: 'Semen Portland 50 kg', unit: 'zak', price: 62000, per: 50 },
+  pasir: { name: 'Pasir Pasang', unit: 'm³', price: 180000 },
+  kerikil: { name: 'Kerikil/Split', unit: 'm³', price: 220000 },
+  bata: { name: 'Bata Merah', unit: 'bh', price: 800 },
+  besi: { name: 'Besi Beton', unit: 'kg', price: 16000 },
+  bendrat: { name: 'Kawat Bendrat', unit: 'kg', price: 25000 },
+  keramik: { name: 'Keramik Lantai', unit: 'm²', price: 85000 },
+  cat: { name: 'Cat Tembok', unit: 'kg', price: 95000 },
+  batukali: { name: 'Batu Kali / Batu Belah', unit: 'm³', price: 0 },
+  pasirurug: { name: 'Pasir Urug', unit: 'm³', price: 0 },
+  semenwarna: { name: 'Semen Warna (nat)', unit: 'kg', price: 0 },
+};
+// beton per m³: semen kg, pasir m³, kerikil m³
+const BETON = { k100: [247, 0.621, 0.74], k225: [371, 0.499, 0.776], k250: [384, 0.494, 0.77] };
+const beton = (mutu, vol) => ({ semen: BETON[mutu][0] * vol, pasir: BETON[mutu][1] * vol, kerikil: BETON[mutu][2] * vol });
+// per satuan pekerjaan -> bahan (semen dalam kg)
+export const KOEF = {
+  '7.1.1.1': { bata: 70, semen: 11.5, pasir: 0.043 },
+  '7.2.1.1': { semen: 6.24, pasir: 0.024 },
+  '7.2.1.2': { semen: 3.25 },
+  '6.6.1.1': { batukali: 1.2, semen: 163, pasir: 0.52 },
+  '6.2.1.1': { pasirurug: 1.2 },
+  '6.9.1.1': beton('k100', 0.05),
+  '18.1.1.1': { ...beton('k225', 0.12), besi: 10, bendrat: 0.15 },
+  '6.8.1.1': { ...beton('k225', 0.0225), besi: 3.3, bendrat: 0.05 },
+  '6.8.1.2': { ...beton('k225', 0.03), besi: 3.4, bendrat: 0.05 },
+  sloof: { ...beton('k225', 0.03), besi: 3.4, bendrat: 0.05 },
+  '6.3.1.3': { ...beton('k250', 1), besi: 80, bendrat: 1.2 },
+  '7.4.1.1': { keramik: 1.05, semen: 10, pasir: 0.045, semenwarna: 1.5 },
+  '7.4.1.2': { keramik: 1.05, semen: 9.8, pasir: 0.045, semenwarna: 1.3 },
+  '9.1.1.1': { semen: 9.6, pasir: 0.045, semenwarna: 1.0 },
+  '7.3.1.1': { cat: 0.26 },
+  '7.3.1.2': { cat: 0.3 },
+};
+export function materialTakeoff(model) {
+  const q = rabQuantities(model);
+  const need = {};
+  for (const it of Object.values(q)) {
+    const k = KOEF[it.code];
+    if (!k) continue;
+    for (const [m, c] of Object.entries(k)) need[m] = (need[m] || 0) + c * it.vol;
+  }
+  const prices = (model.rab && model.rab.matPrices) || {};
+  return Object.keys(MATERIALS).filter((k) => need[k] > 1e-6).map((k) => {
+    const M = MATERIALS[k];
+    const raw = M.per ? need[k] / M.per : need[k];
+    const qty = M.unit === 'bh' || M.unit === 'zak' ? Math.ceil(raw) : Math.ceil(raw * 100) / 100;
+    const price = prices[k] ?? M.price;
+    return { key: k, name: M.name, unit: M.unit, qty, price, total: Math.round(qty * price) };
+  });
+}
+
+// ---------- Jadwal & Kurva S ----------
+// Rentang tiap kategori pekerjaan sebagai pecahan durasi proyek (urutan pembangunan rumah umum).
+export const PHASES = {
+  'Pekerjaan Tanah': [0, 0.1], 'Pekerjaan Pondasi': [0.05, 0.2], 'Pekerjaan Beton': [0.12, 0.5], 'Cor Dak': [0.3, 0.5],
+  'Pekerjaan Dinding': [0.2, 0.55], 'Pekerjaan Kayu': [0.35, 0.75], 'Konstruksi Baja': [0.45, 0.7], 'Baja Ringan': [0.5, 0.65],
+  'Pekerjaan Atap': [0.55, 0.72], 'Pekerjaan Plester': [0.45, 0.75], 'Pekerjaan Plafon': [0.68, 0.85], 'Pekerjaan Lantai': [0.72, 0.9],
+  'Pekerjaan Cat': [0.85, 1],
+};
+const UTIL = [0.3, 0.95];
+export function schedule(rows, weeks) {
+  weeks = Math.max(2, Math.round(weeks));
+  const total = rows.reduce((a, r) => a + r.total, 0) || 1;
+  const cats = [];
+  for (const r of rows) {
+    const name = PHASES[r.cat] ? r.cat : 'Pekerjaan MEP (listrik, air & sanitasi)';
+    let c = cats.find((x) => x.cat === name);
+    if (!c) cats.push((c = { cat: name, cost: 0 }));
+    c.cost += r.total;
+  }
+  for (const c of cats) {
+    const [a, b] = PHASES[c.cat] || UTIL;
+    c.w0 = Math.min(weeks - 1, Math.floor(a * weeks));
+    c.w1 = Math.max(c.w0 + 1, Math.ceil(b * weeks));
+    c.weight = (c.cost / total) * 100;
+    c.per = Array(weeks).fill(0);
+    for (let w = c.w0; w < c.w1; w++) c.per[w] = c.weight / (c.w1 - c.w0);
+  }
+  cats.sort((x, y) => x.w0 - y.w0 || x.w1 - y.w1);
+  const plan = Array(weeks).fill(0).map((_, w) => cats.reduce((a, c) => a + c.per[w], 0));
+  const cum = [];
+  plan.reduce((a, v, i) => (cum[i] = a + v), 0);
+  return { weeks, cats, plan, cum };
+}
