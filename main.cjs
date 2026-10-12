@@ -63,6 +63,7 @@ function buildMenu() {
         { type: 'separator' },
         { label: 'Ekspor Gambar Kerja (PDF)...', accelerator: 'CmdOrCtrl+P', click: () => send('exportPdf') },
         { label: 'Laporan Daftar Bahan (Excel)...', click: () => send('exportBom') },
+        { label: 'RAB Otomatis (Excel)...', click: () => send('exportRab') },
         { label: 'Ekspor DXF (AutoCAD)...', click: () => send('exportDxf') },
         { label: 'Ekspor STL...', click: () => send('exportStl') },
         { type: 'separator' },
@@ -387,6 +388,10 @@ API \`sketch\` (semua fungsi pembuat benda mengembalikan id solid, kecuali diseb
 - pushPull(faceId, d) — tarik bidang sejauh d sepanjang normalnya (bidang lepas menjadi solid tertutup)
 - wall(points, thickness=0.15, height=2.8, closed=false, color) — dinding dari titik denah [[x,y,0],...]
 - roof(solidIds, pitchDeg=30, overhang=0.4) — atap pelana bergenteng di atas solid-solid tersebut
+- wallFaceAt(x, y, z=1) — cari bidang dinding terdekat; mengembalikan {id, point} untuk door/window
+- door(faceId, point, w=0.9, h=2.1) / window(faceId, point, w=1.2, h=1.2, sill=0.9) — kusen pintu/jendela yang otomatis melubangi dinding (contoh: const f = sketch.wallFaceAt(2, -0.075, 1); sketch.door(f.id, f.point))
+- room(x, y, name) — ruang di titik dalam dinding tertutup (lantai + label nama & luas m², masuk RAB)
+- level(name, z, h=3.5) — buat/aktifkan lantai bertingkat; dinding & ruang berikutnya dibuat di elevasi lantai tersebut (titik dinding pakai z lantai)
 - library(name, x, y, z=0, angleDeg=0) — sisipkan komponen pustaka: meja, kursi, sofa, ranjang, lemari, pintu, jendela, pohon, manusia, mobil, tangga (mengembalikan id grup)
 - solidFaces(solidId) — daftar id bidang milik solid
 - paint(faceIds, color, tex=null, texScale=1) — tekstur bawaan: 'b:kayu','b:bata','b:beton','b:ubin','b:rumput','b:batu','b:atap','b:air' (pakai color '#ffffff' bila bertekstur)

@@ -19,6 +19,8 @@ Installer belum ditandatangani digital, jadi Windows SmartScreen bisa menampilka
 
 **Bentuk lanjutan** — Bulatkan sudut / semua rusuk, Chamfer, Haluskan permukaan (subdivisi), Lentur / Runcing / Puntir, Pahat (Smoove), Potong bersilangan (Intersect), Solid Tools (gabung, kurangi, irisan), Atap pelana otomatis, Teks 3D, Medan (Sandbox).
 
+**Konstruksi bangunan** — Kusen pintu & jendela yang otomatis melubangi dinding (ikut bergerak bersama dindingnya), alat Ruang (nama + luas m² tampil di model dan denah), lantai bertingkat (elevasi, tampil/sembunyi per lantai), denah per lantai di PDF, dan **RAB otomatis** dari model: galian, pondasi, sloof, kolom praktis, ring balok, pasangan bata (dikurangi bukaan), plester, acian, cat, keramik, plafon, kusen, daun pintu/jendela, cor dak, rangka & genteng atap — harga AHSP bisa diubah, ekspor Excel format RAB_Bangunan (panel kanan → **Konstruksi**, atau Berkas → RAB Otomatis).
+
 **Pengorganisasian** — Grup & Komponen bertaut (bisa bersarang), Salinan cermin bertaut, Tag, Outliner, Adegan + animasi, Sembunyikan/tampilkan, Bidang potong.
 
 **Tampilan & render** — Gaya (Standar, Sketsa, Arsitek, Monokrom, Kawat, X-Ray, Kartun, Render), bayangan matahari dengan slider jam, bayangan lembut (AO), langit realistis, lampu & mode malam, material bertekstur / mengkilap / logam / kaca, posisi tekstur.
@@ -43,7 +45,7 @@ Taruh berkas `.js` di folder plugin (menu **Ekstensi → Buka Folder Plugin**):
 sketch.addCommand('Kotak 1 m', () => sketch.box(0, 0, 0, 1, 1, 1, '#d9b27c'));
 ```
 
-API `sketch` juga dipakai Asisten AI: `box`, `roundBox`, `cylinder`, `sphere`, `ellipsoid`, `cone`, `capsule`, `torus`, `face`, `pushPull`, `wall`, `roof`, `library`, `paint`, `finish`, `move`, `rotate`, `scaleIds`, `subtract`, `union`, `roundEdges`, `smooth`, `group`, `light`, `style`, `text`, `log`, `toast`, `addCommand`.
+API `sketch` juga dipakai Asisten AI: `box`, `roundBox`, `cylinder`, `sphere`, `ellipsoid`, `cone`, `capsule`, `torus`, `face`, `pushPull`, `wall`, `roof`, `library`, `door`, `window`, `wallFaceAt`, `room`, `level`, `rab`, `paint`, `finish`, `move`, `rotate`, `scaleIds`, `subtract`, `union`, `roundEdges`, `smooth`, `group`, `light`, `style`, `text`, `log`, `toast`, `addCommand`.
 
 ## Mengembangkan
 
@@ -53,7 +55,7 @@ npm start            # jalankan dari kode sumber
 npm run dist         # buat installer di dist/
 npm run release          # buat installer & unggah ke draf GitHub Release (butuh GH_TOKEN)
 npm run release:publish  # terbitkan draf -> aplikasi terpasang akan memperbarui diri
-node test/csg.test.js   # tes geometri (juga: groups, shapes, deform, arch, boolean2, boolean3)
+node test/csg.test.js   # tes geometri (juga: groups, shapes, deform, arch, boolean2, boolean3, construct)
 ```
 
 ## Contoh hasil

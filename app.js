@@ -7,6 +7,7 @@ import { parse as parseFont } from 'opentype.js';
 import { zipSync, strToU8 } from 'fflate';
 import QRCode from 'qrcode';
 import { LIBRARY, insertLibrary } from './library.js';
+import * as C from './construct.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
@@ -766,7 +767,10 @@ function syncLabels(m) {
     }
     labelLayer.appendChild(el);
   };
-  for (const l of m.labels || []) mk(l.text, V3(l.p), 'lbl', l.id, true);
+  for (const l of m.labels || []) {
+    if (l.room != null && (!m.groups[l.room] || !visibleFn({ group: l.room }))) continue;
+    mk(l.text, V3(l.p), l.room != null ? 'lbl room' : 'lbl', l.id, true);
+  }
   for (const L of m.lights || []) mk(L.dir ? '◉ sorot' : '◉ lampu', V3(L.p), 'lbl lamp', L.id, false);
   for (const d of m.dims || []) {
     const a = V3(d.a), b = V3(d.b);
@@ -2026,7 +2030,7 @@ tools.wall = {
   t: 0.15, h: 2.8, pts: [],
   cancel() { this.pts = []; },
   activate() { setHint(`Klik titik-titik denah. Klik titik pertama untuk ruang tertutup, Enter untuk dinding terbuka. Ketik "tebal;tinggi" (sekarang ${fmt(this.t)} ; ${fmt(this.h)}).`); },
-  plane() { return { p: this.pts[0] ? this.pts[0].clone() : new THREE.Vector3(), n: AXES[2] }; },
+  plane() { return { p: this.pts[0] ? this.pts[0].clone() : new THREE.Vector3(0, 0, curLevel().z), n: AXES[2] }; },
   build(m, pts, closed) {
     const fp = G.wallFootprint(pts.map(A), this.t, closed);
     if (!fp) return null;
@@ -2039,19 +2043,22 @@ tools.wall = {
     return f.solid;
   },
   down(ev) {
-    const r = inferPoint(ev, { anchor: this.pts[this.pts.length - 1], plane: this.pts.length ? this.plane() : null });
+    const r = inferPoint(ev, { anchor: this.pts[this.pts.length - 1], plane: this.plane() });
     if (!r) return;
     if (this.pts.length >= 3 && (r.p.distanceTo(this.pts[0]) < 1e-6 || screenDist(this.pts[0], ev) < 10)) return this.finish(true);
     if (this.pts.length && r.p.distanceTo(this.pts[this.pts.length - 1]) < 1e-6) return;
     const p = r.p.clone();
-    if (this.pts.length) p.z = this.pts[0].z;
+    p.z = this.pts.length ? this.pts[0].z : curLevel().z;
     this.pts.push(p);
   },
   dbl() { this.finish(false); },
   onEnter() { this.finish(false); },
   finish(closed) {
-    if (this.pts.length >= 2 && this.build(model, this.pts, closed) != null) changed();
-    else {
+    const sid = this.pts.length >= 2 ? this.build(model, this.pts, closed) : null;
+    if (sid != null) {
+      levelTag(C.makeWallGroup(model, sid, { t: this.t, h: this.h, pts: this.pts.map(A), closed }, editGroup));
+      changed();
+    } else {
       if (this.pts.length >= 2) toast('Denah tidak valid');
       clearPreview();
     }
@@ -2086,6 +2093,119 @@ tools.wall = {
     const d = r.p.clone().sub(last).setZ(0);
     if (d.length() < 1e-6) return;
     this.pts.push(last.clone().addScaledVector(d.normalize(), nums[0]));
+  },
+};
+
+// ======================= Konstruksi: lantai, kusen, ruang =======================
+function curLevel() {
+  const L = C.levelsOf(model);
+  return L[Math.min(model.activeLevel || 0, L.length - 1)];
+}
+function newTag(name) {
+  const t = { id: model.nextId++, name, visible: true, color: TAG_COLORS[model.tags.length % TAG_COLORS.length] };
+  model.tags.push(t);
+  return t.id;
+}
+function levelTag(gid) {
+  const lv = curLevel();
+  if (gid != null && lv.tag != null && model.groups[gid] && model.groups[gid].tag == null) model.groups[gid].tag = lv.tag;
+  return gid;
+}
+function addLevel() {
+  const L = C.levelsOf(model);
+  if (L.length === 1 && L[0].tag == null) {
+    L[0].tag = newTag(L[0].name);
+    for (const g of Object.values(model.groups)) if ((g.parent ?? null) === null && g.tag == null && (g.wall || g.room)) g.tag = L[0].tag;
+  }
+  const last = L[L.length - 1];
+  const lv = { name: 'Lantai ' + (L.length + 1), z: +(last.z + last.h).toFixed(3), h: last.h, tag: null };
+  lv.tag = newTag(lv.name);
+  L.push(lv);
+  model.activeLevel = L.length - 1;
+  changed();
+  toast(`${lv.name} ditambahkan (elevasi ${fmt(lv.z)}). Dinding & ruang baru digambar di lantai ini.`);
+}
+// tinggi irisan denah: sedikit di bawah puncak dinding terendah di lantai ini
+function roomSliceZ(z) {
+  let h = Infinity;
+  for (const g of Object.values(model.groups)) if (g.wall && Math.abs((g.wall.pts[0]?.[2] ?? 0) - z) < 0.1) h = Math.min(h, g.wall.h);
+  return z + (Number.isFinite(h) ? h - 0.1 : 1.0);
+}
+function planePoint(ev, z) {
+  const ray = getRay(ev);
+  return ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3());
+}
+
+const openingTool = (type) => ({
+  label: type === 'pintu' ? 'Kusen Pintu' : 'Kusen Jendela',
+  icon: type === 'pintu'
+    ? '<path d="M6 21V3h12v18M3 21h18"/><path d="M15 12h.5"/>'
+    : '<rect x="4" y="5" width="16" height="14"/><path d="M12 5v14M4 12h16"/>',
+  hint: '',
+  o: { ...C.OPENING_DEFAULTS[type] },
+  activate() {
+    const o = this.o;
+    setHint(`Arahkan ke bidang dinding lalu klik: ${type} ${fmt(o.w)} × ${fmt(o.h)}${type === 'jendela' ? `, tinggi ambang ${fmt(o.sill)}` : ''}. Ketik "lebar;tinggi${type === 'jendela' ? ';ambang' : ''}" + Enter untuk mengubah ukuran. Dinding otomatis berlubang.`);
+  },
+  move(ev) {
+    const hit = pickFace(ev);
+    const fr = hit && C.openingFrame(model, hit.faceId, hit.point, this.o);
+    if (!fr || fr.error) {
+      if (fastIds) { fastEnd(); refresh(); }
+      setMeasure(fr && fr.error ? fr.error : '');
+      return;
+    }
+    const pm = { ...model, faces: [], lines: [], groups: {}, nextId: model.nextId };
+    C.buildKusen(pm, type, fr.w, fr.h, fr.t, fr.M);
+    if (!fastIds) fastBegin(new Set(), pm);
+    else fastSetMoving(pm);
+    setMeasure(`${fmt(fr.w)} × ${fmt(fr.h)} · tebal dinding ${fmt(fr.t)}`);
+  },
+  down(ev) {
+    const hit = pickFace(ev);
+    if (!hit) return;
+    if (fastIds) fastEnd();
+    const r = C.placeOpening(model, hit.faceId, hit.point, type, this.o);
+    if (r.error) return toast(r.error);
+    changed();
+    toast(`${type === 'pintu' ? 'Pintu' : 'Jendela'} dipasang; dinding dilubangi otomatis`);
+  },
+  cancel() { if (fastIds) { fastEnd(); refresh(); } },
+  onVCB(t) {
+    const n = parseNums(t, 3);
+    if (n[0] > 0) this.o.w = n[0];
+    if (n[1] > 0) this.o.h = n[1];
+    if (n[2] >= 0) this.o.sill = n[2];
+    this.activate();
+  },
+});
+tools.pintu = openingTool('pintu');
+tools.jendela = openingTool('jendela');
+
+tools.room = {
+  label: 'Ruang (luas lantai)',
+  icon: '<path d="M4 4h16v16H4zM13 4v7M4 14h6"/>',
+  hint: 'Klik di dalam ruangan yang dikelilingi dinding untuk menamai ruang & menghitung luasnya.',
+  activate() { setHint(`Klik di dalam ruangan tertutup dinding (${curLevel().name}). Nama + luas tampil di model, denah PDF, dan RAB.`); },
+  down(ev) {
+    const z = curLevel().z;
+    const p = planePoint(ev, z);
+    if (!p) return;
+    const vis = makeVisible(model);
+    const out = C.roomOutline(model, p.x, p.y, roomSliceZ(z), (f) => vis(f) && !model.groups[f.group]?.room);
+    if (!out) return toast('Titik ini tidak berada di ruang yang tertutup dinding');
+    const n = Object.values(model.groups).filter((g) => g.room).length + 1;
+    const r0 = stage.getBoundingClientRect();
+    askText(ev.clientX - r0.left, ev.clientY - r0.top, 'Ruang ' + n, (name) => {
+      if (!name) return;
+      levelTag(C.makeRoom(model, out, name, z, { parent: editGroup }));
+      changed();
+      toast(`${name}: ${out.area.toFixed(2)} m²`);
+    });
+  },
+  move(ev) {
+    const p = planePoint(ev, curLevel().z);
+    showSnap(p ? { p, kind: 'on' } : null);
   },
 };
 
@@ -3606,7 +3726,7 @@ tools.pan = {
 };
 
 // ======================= Toolbar =======================
-const order = ['select', 'line', 'arc', 'spline', 'freehand', 'rect', 'rrect', 'wall', 'circle', 'polygon', '|', 'sphere', 'cone', 'capsule', 'torus', '|', 'pushpull', 'offset', 'follow', '|', 'move', 'rotate', 'scale', '|', 'eraser', 'paint', '|', 'tape', 'dim', 'text', 'section', 'text3d', 'lamp', '|', 'terrain', 'smoove', '|', 'orbit', 'pan', 'look', 'walk', 'poscam'];
+const order = ['select', 'line', 'arc', 'spline', 'freehand', 'rect', 'rrect', 'wall', 'pintu', 'jendela', 'room', 'circle', 'polygon', '|', 'sphere', 'cone', 'capsule', 'torus', '|', 'pushpull', 'offset', 'follow', '|', 'move', 'rotate', 'scale', '|', 'eraser', 'paint', '|', 'tape', 'dim', 'text', 'section', 'text3d', 'lamp', '|', 'terrain', 'smoove', '|', 'orbit', 'pan', 'look', 'walk', 'poscam'];
 for (const name of order) {
   const tb = $('toolbar');
   if (name === '|') {
@@ -3821,7 +3941,10 @@ function roofSel() {
     if (!(pitch > 0 && pitch < 80)) return toast('Kemiringan 1–79°');
     const sid = G.gableRoof(model, box, pitch, over >= 0 ? over : 0.4, '#ffffff', editGroup);
     if (sid == null) return toast('Gagal membuat atap');
-    G.paint(model, new Set(model.faces.filter((f) => f.solid === sid).map((f) => f.id)), '#ffffff', 'b:atap', 0.6);
+    const rids = new Set(model.faces.filter((f) => f.solid === sid).map((f) => f.id));
+    G.paint(model, rids, '#ffffff', 'b:atap', 0.6);
+    const rg = G.makeGroup(model, rids, 'Atap', false, editGroup);
+    model.groups[rg].roof = { pitch };
     selection = new Set();
     changed();
     toast(`Atap pelana ${pitch}° dibuat (teritis ${fmt(over >= 0 ? over : 0.4)})`);
@@ -4443,12 +4566,60 @@ const sketch = {
     f.group = editGroup;
     model.faces.push(f);
     G.pushPull(model, f.id, height);
+    levelTag(C.makeWallGroup(model, f.solid, { t: thickness, h: height, pts: points, closed }, editGroup));
     return f.solid;
   },
+  opening(faceId, point, type = 'pintu', w, h, sill) {
+    const o = {};
+    if (w > 0) o.w = w;
+    if (h > 0) o.h = h;
+    if (sill >= 0) o.sill = sill;
+    const r = C.placeOpening(model, faceId, V3(point), type, o);
+    if (r.error) throw new Error(r.error);
+    return r.gid;
+  },
+  door(faceId, point, w, h) { return this.opening(faceId, point, 'pintu', w, h, 0); },
+  window(faceId, point, w, h, sill) { return this.opening(faceId, point, 'jendela', w, h, sill); },
+  wallFaceAt(x, y, z = 1) {
+    // bidang dinding tegak terdekat dari titik (x,y,z)
+    let best = null, bd = Infinity;
+    for (const f of model.faces) {
+      if (Math.abs(f.n[2]) > 0.1 || f.solid == null) continue;
+      const d = Math.abs((x - f.pts[0][0]) * f.n[0] + (y - f.pts[0][1]) * f.n[1]);
+      const bx = new THREE.Box3().setFromPoints(f.pts.map(V3)).expandByScalar(0.05);
+      if (d < bd && bx.containsPoint(new THREE.Vector3(x, y, z).addScaledVector(V3(f.n), -d))) { bd = d; best = f; }
+    }
+    if (!best) return null;
+    const pt = new THREE.Vector3(x, y, z).addScaledVector(V3(best.n), -((x - best.pts[0][0]) * best.n[0] + (y - best.pts[0][1]) * best.n[1]));
+    return { id: best.id, point: [pt.x, pt.y, pt.z] };
+  },
+  room(x, y, name = 'Ruang') {
+    const z = curLevel().z;
+    const out = C.roomOutline(model, x, y, roomSliceZ(z), (f) => !model.groups[f.group]?.room);
+    if (!out) throw new Error('titik tidak berada dalam ruang tertutup dinding');
+    return levelTag(C.makeRoom(model, out, name, z, { parent: editGroup }));
+  },
+  level(name, z, h = 3.5) {
+    const L = C.levelsOf(model);
+    let i = L.findIndex((l) => l.name === name);
+    if (i < 0) {
+      addLevel();
+      i = L.length - 1;
+      L[i].name = name;
+      if (z != null) L[i].z = z;
+      L[i].h = h;
+    }
+    model.activeLevel = i;
+    return i;
+  },
+  rab() { return C.rabRows(model); },
   roof(solidIds, pitchDeg = 30, overhang = 0.4) {
     const ids = new Set(solidIds.flatMap((sid) => this.solidFaces(sid)));
     const sid = G.gableRoof(model, G.bboxOf(model, ids), pitchDeg, overhang, '#ffffff', editGroup);
-    if (sid != null) G.paint(model, new Set(this.solidFaces(sid)), '#ffffff', 'b:atap', 0.6);
+    if (sid != null) {
+      G.paint(model, new Set(this.solidFaces(sid)), '#ffffff', 'b:atap', 0.6);
+      model.groups[G.makeGroup(model, new Set(this.solidFaces(sid)), 'Atap', false, editGroup)].roof = { pitch: pitchDeg };
+    }
     return sid;
   },
   library(name, x, y, z = 0, angleDeg = 0) {
@@ -4598,7 +4769,7 @@ document.querySelectorAll('#trayTabs button').forEach((b) => (b.onclick = () => 
 
 function renderTray() {
   if ($('tray').hidden) return;
-  const fn = { lib: renderLibPane, info: renderInfoPane, mat: renderMatPanel, tags: renderTagsPane, outliner: renderOutliner, scenes: renderScenesPane, styles: renderStylesPane }[trayTab];
+  const fn = { lib: renderLibPane, info: renderInfoPane, mat: renderMatPanel, tags: renderTagsPane, outliner: renderOutliner, scenes: renderScenesPane, styles: renderStylesPane, kons: renderKonsPane }[trayTab];
   fn && fn();
 }
 
@@ -5167,7 +5338,7 @@ const VIEWDEF = {
 };
 
 // Render satu tampak ortografis ke gambar PNG (gaya garis), dengan skala px/m tertentu.
-function renderView(kind, W, H, pxPerM, box) {
+function renderView(kind, W, H, pxPerM, box, clip = null) {
   const def = VIEWDEF[kind];
   const c = box.getCenter(new THREE.Vector3());
   const cam = new THREE.OrthographicCamera(-W / 2 / pxPerM, W / 2 / pxPerM, H / 2 / pxPerM, -H / 2 / pxPerM, 0.01, 10000);
@@ -5192,7 +5363,9 @@ function renderView(kind, W, H, pxPerM, box) {
   renderer.setPixelRatio(1);
   renderer.setSize(W, H, false);
   scene.background = new THREE.Color(0xffffff);
+  renderer.clippingPlanes = clip || [];
   renderer.render(scene, cam);
+  renderer.clippingPlanes = [];
   const data = canvas.toDataURL('image/png');
   scene.background = null;
   [grid.visible, axesGroup.visible, shadowCatcher.visible, renderer.shadowMap.enabled, sun.castShadow] = vis;
@@ -5256,6 +5429,7 @@ async function exportDrawing() {
   }
   const name = filePath ? filePath.split(/[\\/]/).pop().replace(/\.skc$/, '') : 'Tanpa Judul';
   const date = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+  const plans = planSheets(vis);
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>
     @page { size: A3 landscape; margin: 0; }
     html, body { margin: 0; font-family: "Segoe UI", Arial, sans-serif; color: #111; }
@@ -5270,13 +5444,163 @@ async function exportDrawing() {
     .title div { border-left: 0.25mm solid #111; padding: 1.5mm 2mm; } .title div:first-child { border-left: none; }
     .title b { display: block; font-size: 4.2mm; margin-top: 1mm; }
     .brand { position: absolute; left: 12mm; bottom: 13mm; font-size: 3mm; color: #555; }
+    .plan { position: absolute; left: 12mm; top: 12mm; width: 396mm; height: 250mm; }
+    .plan img, .plan svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .plan .cut { stroke: #111; stroke-width: 5; stroke-linecap: square; }
+    .plan .rn { font-size: 22px; font-weight: 700; fill: #1d2b3a; } .plan .ra { font-size: 19px; fill: #44515f; }
+    .plan .dim line { stroke: #c0392b; stroke-width: 2; } .plan .dim text { fill: #c0392b; font-size: 22px; font-weight: 600; }
   </style></head><body><div class="sheet"><div class="frame"></div><div class="grid">${cells.join('')}</div>
     <div class="title"><div>PROYEK<b>${escHtml(name)}</b></div><div>TANGGAL<b>${escHtml(date)}</b></div><div>SATUAN / SKALA<b>${escHtml(unitOf().u)} · 1:${N}</b></div></div>
     <div class="brand">Dibuat dengan SketchClone · ukuran keseluruhan ${escHtml(fmt(size.x))} × ${escHtml(fmt(size.y))} × ${escHtml(fmt(size.z))}</div>
-  </div></body></html>`;
+  </div>${plans.map((pl) => `<div class="sheet" style="page-break-before:always"><div class="frame"></div>
+    <div class="plan">${pl.body}</div>
+    <div class="title"><div>${escHtml(pl.title)}<b>${escHtml(name)}</b></div><div>TANGGAL<b>${escHtml(date)}</b></div><div>LUAS LANTAI<b>${escHtml(pl.area)}</b></div></div>
+    <div class="brand">Dibuat dengan SketchClone · SKALA 1:${pl.N}</div></div>`).join('')}</body></html>`;
   const out = await window.api.savePdf(html, name + ' - gambar kerja.pdf');
   out && toast('Gambar kerja PDF disimpan');
   return html.length;
+}
+
+// Lembar denah per lantai: irisan dinding tebal + nama & luas ruang + dimensi luar.
+function planSheets(vis) {
+  const L = C.levelsOf(model);
+  const out = [];
+  L.forEach((lv, li) => {
+    const walls = Object.entries(model.groups).filter(([gid, g]) => g.wall && Math.abs((g.wall.pts[0]?.[2] ?? 0) - lv.z) < 0.1 && vis({ group: +gid }));
+    if (!walls.length) return;
+    const ids = new Set();
+    for (const [gid] of walls) for (const id of G.entitiesInTree(model, +gid)) ids.add(id);
+    const box = G.bboxOf(model, ids, vis);
+    const size = box.getSize(new THREE.Vector3());
+    const W = 1600, H = 1010;
+    const mmPerPx = 396 / W;
+    let px = Math.min((W * 0.78) / Math.max(size.x, 1e-3), (H * 0.74) / Math.max(size.y, 1e-3));
+    const nice = [20, 25, 50, 75, 100, 125, 150, 200, 250, 500, 1000];
+    const N = nice.find((n) => n >= 1000 / (px * mmPerPx)) || 1000;
+    px = 1000 / (N * mmPerPx);
+    const cutZ = lv.z + 1.2;
+    const clip = [new THREE.Plane(new THREE.Vector3(0, 0, -1), cutZ), new THREE.Plane(new THREE.Vector3(0, 0, 1), -(lv.z + 0.001))];
+    const { data, cam } = renderView('atas', W, H, px, box, clip);
+    const sp = (x, y, z) => {
+      const v = new THREE.Vector3(x, y, z).project(cam);
+      return [((v.x + 1) / 2) * W, ((1 - v.y) / 2) * H];
+    };
+    const segs = C.sliceSegments(model, cutZ, (f) => vis(f) && ids.has(f.id));
+    const lines = segs.map(([a, b]) => { const p = sp(a[0], a[1], cutZ), q = sp(b[0], b[1], cutZ); return `<line class="cut" x1="${p[0].toFixed(1)}" y1="${p[1].toFixed(1)}" x2="${q[0].toFixed(1)}" y2="${q[1].toFixed(1)}"/>`; }).join('');
+    let area = 0;
+    const rooms = Object.entries(model.groups).filter(([gid, g]) => g.room && Math.abs(g.room.z - lv.z) < 0.1 && vis({ group: +gid })).map(([, g]) => {
+      area += g.room.area;
+      const lab = model.labels.find((l) => l.id === g.room.label);
+      const c = lab ? lab.p : [box.min.x, box.min.y, lv.z];
+      const [x, y] = sp(c[0], c[1], lv.z);
+      return `<text class="rn" x="${x}" y="${y - 4}" text-anchor="middle">${escHtml(g.room.name)}</text><text class="ra" x="${x}" y="${y + 20}" text-anchor="middle">${g.room.area.toFixed(2)} m²</text>`;
+    }).join('');
+    const [l, b] = sp(box.min.x, box.min.y, lv.z), [r, t] = sp(box.max.x, box.max.y, lv.z);
+    const y = b + 46, x = l - 46;
+    const dims = `<g class="dim"><line x1="${l}" y1="${b + 8}" x2="${l}" y2="${y + 10}"/><line x1="${r}" y1="${b + 8}" x2="${r}" y2="${y + 10}"/><line x1="${l}" y1="${y}" x2="${r}" y2="${y}"/>
+      <line x1="${l - 7}" y1="${y + 7}" x2="${l + 7}" y2="${y - 7}"/><line x1="${r - 7}" y1="${y + 7}" x2="${r + 7}" y2="${y - 7}"/>
+      <text x="${(l + r) / 2}" y="${y - 10}" text-anchor="middle">${escHtml(fmt(size.x))}</text>
+      <line x1="${l - 8}" y1="${t}" x2="${x - 10}" y2="${t}"/><line x1="${l - 8}" y1="${b}" x2="${x - 10}" y2="${b}"/><line x1="${x}" y1="${t}" x2="${x}" y2="${b}"/>
+      <line x1="${x - 7}" y1="${t + 7}" x2="${x + 7}" y2="${t - 7}"/><line x1="${x - 7}" y1="${b + 7}" x2="${x + 7}" y2="${b - 7}"/>
+      <text x="${x - 12}" y="${(t + b) / 2}" text-anchor="middle" transform="rotate(-90 ${x - 12} ${(t + b) / 2})">${escHtml(fmt(size.y))}</text></g>`;
+    out.push({
+      title: 'DENAH ' + lv.name.toUpperCase(), N, area: area ? area.toFixed(2) + ' m²' : '-',
+      body: `<img src="${data}"><svg viewBox="0 0 ${W} ${H}">${lines}${rooms}${dims}</svg>`,
+    });
+  });
+  return out;
+}
+
+// ---- RAB otomatis (format RAB_Bangunan) ----
+function rabProject() {
+  model.rab ||= {};
+  model.rab.project ||= {};
+  const p = model.rab.project;
+  return { name: p.name || (filePath ? filePath.split(/[\\/]/).pop().replace(/\.skc$/, '') : 'Proyek SketchClone'), location: p.location || '-', status: p.status || 'Perencanaan' };
+}
+async function exportRab(toFile = true) {
+  const rows = C.rabRows(model);
+  if (!rows.length) return toast('Belum ada dinding / ruang / kusen / atap untuk dihitung. Gambar dengan alat Dinding, Pintu, Jendela, Ruang, dan Atap.');
+  const { data, grand } = C.rabSheet(model, rows, rabProject());
+  const bold = new Set([0, 6, data.length - 1]);
+  data.forEach((r, i) => { if (r.length === 12 && r[1] === '' && i > 6) bold.add(i); });
+  const bytes = xlsx([{ name: 'RAB', rows: data, bold, widths: [6, 22, 42, 11, 10, 8, 14, 15, 15, 13, 17, 10] }, { name: 'Harga AHSP', rows: [['Kode', 'Jenis Pekerjaan', 'Satuan', 'Harga Satuan', 'Material', 'Tenaga', 'Alat', 'Kategori'], ...C.AHSP.map((a) => [a.code, a.name, a.unit, (model.rab?.prices || {})[a.code] ?? a.price, a.mat, a.lab, a.eq, a.sub])] }]);
+  if (!toFile) return { bytes: bytes.length, rows, grand, data };
+  const out = await window.api.exportBinary('xlsx', bytes, rabProject().name + ' - RAB.xlsx');
+  out && toast('RAB disimpan · total Rp ' + grand.toLocaleString('id-ID'));
+}
+
+function renderKonsPane() {
+  const P = $('pane-kons');
+  P.replaceChildren();
+  const L = C.levelsOf(model);
+  P.append(mkEl('div', { className: 'ttl', textContent: 'Lantai' }));
+  L.forEach((lv, i) => {
+    const tag = model.tags.find((t) => t.id === lv.tag);
+    P.append(mkEl('div', { className: 'lvrow' + (i === (model.activeLevel || 0) ? ' on' : '') },
+      mkEl('input', { type: 'radio', name: 'lvl', checked: i === (model.activeLevel || 0), title: 'Lantai aktif (tempat menggambar)', onchange: () => { model.activeLevel = i; renderKonsPane(); tools[toolName]?.activate?.(); } }),
+      mkEl('input', { value: lv.name, className: 'lvname', onchange: (e) => { lv.name = e.target.value || lv.name; if (tag) tag.name = lv.name; changed(); } }),
+      mkEl('label', { title: 'Elevasi lantai (m)' }, '±', mkEl('input', { type: 'number', step: 0.1, value: lv.z, onchange: (e) => { lv.z = +e.target.value || 0; changed(); } })),
+      mkEl('label', { title: 'Tinggi lantai ke lantai (m)' }, '↕', mkEl('input', { type: 'number', step: 0.1, min: 2, value: lv.h, onchange: (e) => { lv.h = +e.target.value || 3.5; changed(); } })),
+      tag ? mkEl('input', { type: 'checkbox', checked: tag.visible !== false, title: 'Tampil/sembunyi', onchange: (e) => { tag.visible = e.target.checked; snapCache = null; changed(); } }) : mkEl('span'),
+    ));
+  });
+  P.append(mkEl('div', { className: 'btnrow' },
+    mkEl('button', { textContent: '+ Tambah lantai', onclick: addLevel }),
+    mkEl('button', { textContent: 'Hanya lantai aktif', disabled: L.length < 2, onclick: () => { L.forEach((lv, i) => { const t = model.tags.find((x) => x.id === lv.tag); if (t) t.visible = i === (model.activeLevel || 0); }); snapCache = null; changed(); } }),
+    mkEl('button', { textContent: 'Semua', disabled: L.length < 2, onclick: () => { L.forEach((lv) => { const t = model.tags.find((x) => x.id === lv.tag); if (t) t.visible = true; }); snapCache = null; changed(); } }),
+  ));
+  P.append(mkEl('div', { className: 'ttl', textContent: 'Ruang' }));
+  const rooms = Object.entries(model.groups).filter(([, g]) => g.room);
+  if (!rooms.length) P.append(mkEl('div', { className: 'muted small', textContent: 'Pakai alat Ruang lalu klik di dalam ruangan untuk menghitung luasnya.' }));
+  let tot = 0;
+  for (const [gid, g] of rooms) {
+    const r = g.room;
+    tot += r.area;
+    P.append(mkEl('div', { className: 'rmrow' },
+      mkEl('input', { value: r.name, onchange: (e) => {
+        r.name = e.target.value || r.name;
+        g.name = 'Ruang ' + r.name;
+        const lab = model.labels.find((l) => l.id === r.label);
+        if (lab) lab.text = `${r.name}\n${r.area.toFixed(2)} m²`;
+        changed();
+      } }),
+      mkEl('span', { className: 'area', textContent: r.area.toFixed(2) + ' m²', title: 'Klik untuk memilih', onclick: () => { selection = new Set(G.entitiesInTree(model, +gid)); refresh(); } }),
+      mkEl('select', { title: 'Penutup lantai', onchange: (e) => { r.floor = e.target.value; changed(); } },
+        ...Object.entries(C.FLOOR_TYPES).map(([k, v]) => mkEl('option', { value: k, textContent: v, selected: (r.floor || '7.4.1.2') === k }))),
+    ));
+  }
+  if (rooms.length) P.append(mkEl('div', { className: 'small', textContent: `Total luas lantai: ${tot.toFixed(2)} m²` }));
+  P.append(mkEl('div', { className: 'ttl', textContent: 'RAB (Rencana Anggaran Biaya)' }));
+  const pj = rabProject();
+  model.rab ||= {};
+  model.rab.prices ||= {};
+  P.append(trow('Nama proyek', mkEl('input', { value: pj.name, onchange: (e) => { model.rab.project.name = e.target.value; changed(); } })));
+  P.append(trow('Lokasi', mkEl('input', { value: pj.location === '-' ? '' : pj.location, placeholder: 'mis. Bandung', onchange: (e) => { model.rab.project.location = e.target.value; changed(); } })));
+  const rows = C.rabRows(model);
+  if (!rows.length) {
+    P.append(mkEl('div', { className: 'muted small', textContent: 'RAB dihitung otomatis dari dinding, kusen pintu/jendela, ruang, dan atap pelana yang Anda gambar.' }));
+    return;
+  }
+  const tb = mkEl('table', { className: 'rab' }, mkEl('tr', {}, ...['Volume', 'Harga satuan (Rp)', 'Jumlah (Rp)'].map((h) => mkEl('th', { textContent: h }))));
+  let cat = null, grand = 0;
+  for (const r of rows) {
+    if (r.cat !== cat) { cat = r.cat; tb.append(mkEl('tr', { className: 'cat' }, mkEl('td', { colSpan: 3, textContent: cat }))); }
+    grand += r.total;
+    tb.append(mkEl('tr', { className: 'nm' }, mkEl('td', { colSpan: 3, textContent: r.name, title: 'Kode AHSP ' + r.code })));
+    tb.append(mkEl('tr', {},
+      mkEl('td', { className: 'num', textContent: `${r.vol.toLocaleString('id-ID')} ${r.unit}` }),
+      mkEl('td', {}, '× ', mkEl('input', { type: 'number', step: 1000, min: 0, value: r.price, title: 'Ubah harga satuan (Rp)', onchange: (e) => { model.rab.prices[r.key] = Math.max(0, +e.target.value || 0); changed(); } })),
+      mkEl('td', { className: 'num', textContent: r.total.toLocaleString('id-ID') }),
+    ));
+  }
+  tb.append(mkEl('tr', { className: 'tot' }, mkEl('td', { colSpan: 2, textContent: 'TOTAL' }), mkEl('td', { className: 'num', textContent: 'Rp ' + grand.toLocaleString('id-ID') })));
+  P.append(tb);
+  P.append(mkEl('div', { className: 'btnrow' },
+    mkEl('button', { textContent: 'Ekspor RAB (Excel)', onclick: () => exportRab() }),
+    mkEl('button', { textContent: 'Harga default', title: 'Kembalikan semua harga ke AHSP', onclick: () => { model.rab.prices = {}; changed(); } }),
+  ));
+  P.append(mkEl('div', { className: 'muted small', textContent: 'Harga dari AHSP (repo RAB_Bangunan). Volume: bata = luas dinding dikurangi bukaan; plester & acian 2 sisi; pondasi & sloof untuk dinding lantai dasar; kolom praktis tiap sudut + tiap 3 m.' }));
 }
 
 // ---- Daftar bahan (Excel .xlsx) ----
@@ -5353,9 +5677,15 @@ function bomData() {
 function xlsx(sheets) {
   const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
   const col = (i) => String.fromCharCode(65 + i);
-  const sheetXml = (rows) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols>${rows[0].map((_, i) => `<col min="${i + 1}" max="${i + 1}" width="${i === 0 ? 34 : 22}" customWidth="1"/>`).join('')}</cols><sheetData>${rows
-    .map((r, ri) => `<row r="${ri + 1}">${r.map((v, ci) => (typeof v === 'number' ? `<c r="${col(ci)}${ri + 1}"${ri === 0 ? ' s="1"' : ''}><v>${v}</v></c>` : `<c r="${col(ci)}${ri + 1}" t="inlineStr"${ri === 0 ? ' s="1"' : ''}><is><t>${esc(v)}</t></is></c>`)).join('')}</row>`)
-    .join('')}</sheetData></worksheet>`;
+  const sheetXml = (rows, bold = new Set([0]), widths = null) => {
+    const nc = Math.max(...rows.map((r) => r.length));
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols>${[...Array(nc)].map((_, i) => `<col min="${i + 1}" max="${i + 1}" width="${widths ? widths[i] || 14 : i === 0 ? 34 : 22}" customWidth="1"/>`).join('')}</cols><sheetData>${rows
+      .map((r, ri) => {
+        const st = bold.has(ri) ? ' s="1"' : '';
+        return `<row r="${ri + 1}">${r.map((v, ci) => (typeof v === 'number' ? `<c r="${col(ci)}${ri + 1}"${st}><v>${v}</v></c>` : `<c r="${col(ci)}${ri + 1}" t="inlineStr"${st}><is><t>${esc(v)}</t></is></c>`)).join('')}</row>`;
+      })
+      .join('')}</sheetData></worksheet>`;
+  };
   const files = {
     '[Content_Types].xml': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>`),
     '_rels/.rels': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`),
@@ -5363,7 +5693,7 @@ function xlsx(sheets) {
     'xl/_rels/workbook.xml.rels': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`),
     'xl/styles.xml': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="2"><xf fontId="0"/><xf fontId="1" applyFont="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`),
   };
-  sheets.forEach((s2, i) => (files[`xl/worksheets/sheet${i + 1}.xml`] = strToU8(sheetXml(s2.rows))));
+  sheets.forEach((s2, i) => (files[`xl/worksheets/sheet${i + 1}.xml`] = strToU8(sheetXml(s2.rows, s2.bold, s2.widths))));
   return zipSync(files);
 }
 async function exportBom(toFile = true) {
@@ -5546,6 +5876,8 @@ const handleMenu = async (cmd, arg) => {
     case 'updateInfo': toast(arg); break;
     case 'sharePhone': await shareToPhone(); break;
     case 'exportBom': await exportBom(); break;
+    case 'exportRab': await exportRab(); break;
+    case 'kons': showTray('kons'); break;
     case 'exportDxf': {
       const base = filePath ? filePath.split(/[\\/]/).pop().replace(/\.skc$/, '') : 'model';
       const p2 = await window.api.exportFile('dxf', exportDXF(), base + '.dxf');
@@ -5761,7 +6093,7 @@ window.__sk = {
   setSelection: (ids) => { selection = new Set(ids); refresh(); updateInfo(); },
   type: (t) => { vcbText = t; tool.onVCB && tool.onVCB(vcbText); vcbText = ''; renderVCB(); },
   key: (k) => window.dispatchEvent(new KeyboardEvent('keydown', { key: k })),
-  undo, redo, loadModel, setShadows, solidOp, runScript, sketch, textures, setMat, getCurMat: () => curMat, pluginCommands, applyArray, getLastArray: () => lastArray, loadOnlineLib, placeOnline, insertModelAsComponent, exportSelectionComponent, getOnlineLib: () => onlineLib, exportWebViewer, shareToPhone, viewerHtml, runAi, openAi, aiContext, openVersions, newFromTemplate, openKeys, saveKeys, keyTools, recordVideo, sky, exportDrawing, bomData, exportBom, exportDXF, intersectSel, roofSel, showGrips, gripState: () => gripState, fastIds: () => fastIds, openDeform, applyDeform, tessellateSel, mirrorLinked, splinePoints, subdivideSel, roundAllSel, mirrorSel, importReference, filletSel, fitTexture, texMapper, editTexture, exportPNG, serializeProject, applyProjectData, startPlace, LIBRARY, insertLibrary, getFont, textShapes, buildText3D, confirmText3D, getPlaceGen: () => placeGen, boxSelect, openCtx, zoomSelection, fmt, parseNums, eyePos, walkBy, turnView, importMesh, exportGLB, addScene, goScene, showTray, hideSelection, unhideAll, cmd: handleMenu, enterEdit, exitEdit, editGroup: () => editGroup, sunState, styleOf, setStyle, refresh,
+  undo, redo, loadModel, setShadows, solidOp, runScript, sketch, textures, setMat, getCurMat: () => curMat, pluginCommands, applyArray, getLastArray: () => lastArray, C, exportRab, renderKonsPane, addLevel, curLevel, planSheets, roomSliceZ, loadOnlineLib, placeOnline, insertModelAsComponent, exportSelectionComponent, getOnlineLib: () => onlineLib, exportWebViewer, shareToPhone, viewerHtml, runAi, openAi, aiContext, openVersions, newFromTemplate, openKeys, saveKeys, keyTools, recordVideo, sky, exportDrawing, bomData, exportBom, exportDXF, intersectSel, roofSel, showGrips, gripState: () => gripState, fastIds: () => fastIds, openDeform, applyDeform, tessellateSel, mirrorLinked, splinePoints, subdivideSel, roundAllSel, mirrorSel, importReference, filletSel, fitTexture, texMapper, editTexture, exportPNG, serializeProject, applyProjectData, startPlace, LIBRARY, insertLibrary, getFont, textShapes, buildText3D, confirmText3D, getPlaceGen: () => placeGen, boxSelect, openCtx, zoomSelection, fmt, parseNums, eyePos, walkBy, turnView, importMesh, exportGLB, addScene, goScene, showTray, hideSelection, unhideAll, cmd: handleMenu, enterEdit, exitEdit, editGroup: () => editGroup, sunState, styleOf, setStyle, refresh,
   mouse(type, x, y, z, extra = {}) {
     const p = this.project(x, y, z);
     if (!p) return;
