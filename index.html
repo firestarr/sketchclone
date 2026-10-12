@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <title>SketchClone</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="toolbar"></aside>
+    <main id="stage">
+      <canvas id="view" tabindex="0"></canvas>
+      <div id="labels"></div>
+      <div id="selbox" hidden></div>
+      <div id="grips"></div>
+      <div id="ctxmenu" hidden></div>
+      <input type="file" id="refFile" accept="image/*" hidden>
+      <div id="shareDlg" class="dlg" hidden>
+        <div class="ttl">📱 Lihat di HP</div>
+        <div class="muted small">Pastikan HP terhubung ke Wi-Fi yang sama, lalu pindai kode ini dengan kamera HP:</div>
+        <img id="shareQr" style="display:block;margin:8px auto;width:200px;height:200px">
+        <div id="shareUrl" style="text-align:center;font-family:Consolas,monospace;font-size:12px;user-select:text"></div>
+        <div class="muted small">Model bisa diputar & di-zoom di browser HP. Mode AR penuh butuh alamat https (unggah file dari Berkas → Ekspor Halaman Web ke hosting).</div>
+        <div class="btnrow"><button id="shareStop">Hentikan berbagi</button></div>
+      </div>
+      <div id="aiDlg" class="dlg wide" hidden>
+        <div class="ttl">✨ Asisten AI — buat model dari teks atau gambar</div>
+        <textarea id="aiPrompt" rows="4" placeholder="Contoh: rumah satu lantai 7x9 m dengan atap pelana, pintu depan, 4 jendela, teras dan 2 pohon di halaman"></textarea>
+        <div class="btnrow"><button id="aiImgBtn">📎 Lampirkan gambar</button><span id="aiImgName" class="muted"></span></div>
+        <img id="aiThumb" hidden>
+        <div id="aiKeyRow" class="mrow" hidden>
+          <div class="muted small">Masukkan kunci Claude API (console.anthropic.com → API Keys). Disimpan terenkripsi di komputer ini.</div>
+          <div class="btnrow"><input id="aiKey" type="password" placeholder="sk-ant-..."><button id="aiKeySave">Simpan kunci</button></div>
+        </div>
+        <div class="btnrow"><button id="aiGo">Buat model (Ctrl+Enter)</button><button id="aiClose">Tutup</button></div>
+        <div id="aiStatus" class="muted small"></div>
+        <input type="file" id="aiFile" accept="image/*" hidden>
+      </div>
+      <div id="tplDlg" class="dlg wide" hidden>
+        <div class="ttl">Model baru — pilih template</div>
+        <div class="tplgrid">
+          <button data-tpl="arsitektur"><b>🏠 Arsitektur</b><span>meter · langit · rumah & bangunan</span></button>
+          <button data-tpl="interior"><b>🛋 Interior</b><span>sentimeter · studio · bayangan lembut</span></button>
+          <button data-tpl="mebel"><b>🪑 Mebel</b><span>milimeter · studio · presisi</span></button>
+          <button data-tpl="lanskap"><b>🌳 Lanskap</b><span>meter · langit realistis</span></button>
+          <button data-tpl="karakter"><b>🧸 Karakter / Mainan</b><span>sentimeter · render halus</span></button>
+        </div>
+        <div class="btnrow"><button id="tplCancel">Batal</button></div>
+      </div>
+      <div id="verDlg" class="dlg wide" hidden>
+        <div class="ttl">Riwayat versi</div>
+        <div id="verList" class="vlist"></div>
+        <div class="btnrow"><button id="verClose">Tutup</button></div>
+      </div>
+      <div id="keyDlg" class="dlg wide" hidden>
+        <div class="ttl">Pintasan keyboard (klik kotak, tekan tombol baru; Backspace = kosong)</div>
+        <div id="keyList" class="klist"></div>
+        <div class="btnrow"><button id="keySave">Simpan</button><button id="keyReset">Kembalikan bawaan</button><button id="keyClose">Tutup</button></div>
+      </div>
+      <div id="deform" class="dlg" hidden>
+        <div class="ttl">Deformasi</div>
+        <label class="row"><span>Jenis</span><select id="dfKind"><option value="bend">Lentur (bend)</option><option value="taper">Runcing (taper)</option><option value="twist">Puntir (twist)</option></select></label>
+        <label class="row"><span>Sumbu</span><select id="dfAxis"><option value="2">Biru (tegak)</option><option value="0">Merah</option><option value="1">Hijau</option></select></label>
+        <label class="row"><span id="dfAmountLbl">Sudut (°)</span><input id="dfAmount" value="45"></label>
+        <label class="row" id="dfDirRow"><span>Arah lentur</span><select id="dfDir"><option value="0">Ke merah</option><option value="1">Ke hijau</option><option value="2">Ke biru</option></select></label>
+        <label class="row" id="dfSliceRow"><span>Irisan</span><input id="dfSlices" value="16"></label>
+        <div class="btnrow"><button id="dfOk">Terapkan</button><button id="dfCancel">Batal</button></div>
+      </div>
+      <div id="t3d" hidden>
+        <div class="ttl">Teks 3D</div>
+        <textarea id="t3dText" rows="2">SketchClone</textarea>
+        <label class="row"><span>Font</span><select id="t3dFont">
+          <option value="arial.ttf">Arial</option><option value="arialbd.ttf">Arial Tebal</option><option value="segoeui.ttf">Segoe UI</option>
+          <option value="segoeuib.ttf">Segoe UI Tebal</option><option value="times.ttf">Times New Roman</option><option value="timesbd.ttf">Times Tebal</option>
+          <option value="calibri.ttf">Calibri</option><option value="verdana.ttf">Verdana</option><option value="tahoma.ttf">Tahoma</option>
+          <option value="georgia.ttf">Georgia</option><option value="impact.ttf">Impact</option><option value="comic.ttf">Comic Sans</option><option value="consola.ttf">Consolas</option>
+        </select></label>
+        <label class="row"><span>Tinggi</span><input id="t3dSize" value="1"></label>
+        <label class="row"><span>Tebal</span><input id="t3dDepth" value="0.2"></label>
+        <div class="btnrow"><button id="t3dOk">Tempatkan</button><button id="t3dCancel">Batal</button></div>
+      </div>
+      <div id="scenebar" hidden></div>
+      <div id="snap"><i></i><span></span></div>
+      <div id="viewbtns">
+        <button data-view="iso" title="Isometrik">Iso</button>
+        <button data-view="top" title="Atas">Atas</button>
+        <button data-view="front" title="Depan">Depan</button>
+        <button data-view="right" title="Kanan">Kanan</button>
+        <button data-view="fit" title="Zoom semua (Shift+Z)">Zoom</button>
+        <button data-view="ortho" title="Perspektif / Paralel">Persp</button>
+        <button data-view="tray" title="Panel kanan (Ctrl+Shift+P)">Panel</button>
+      </div>
+      <div id="info"></div>
+      <div id="sunbar"><label><input type="checkbox" id="shadowOn"> Bayangan</label><input type="range" id="hour" min="6" max="18" step="0.25" value="14"><span id="hourLbl">14:00</span></div>
+      <div id="toast"></div>
+      <div id="recover" hidden>Ada pekerjaan yang belum tersimpan dari sesi sebelumnya (<span id="recoverTime"></span>).
+        <button id="recoverYes">Pulihkan</button><button id="recoverNo">Abaikan</button></div>
+      <div id="help" hidden></div>
+
+      <div id="console" hidden>
+        <div class="ch"><b>Konsol Skrip</b><span id="plugBtns"></span><button id="conClose" title="Tutup">×</button></div>
+        <textarea id="conIn" spellcheck="false">// Contoh: buat 5 kolom silinder lalu satukan jadi grup
+const ids = [];
+for (let i = 0; i < 5; i++) {
+  const s = sketch.cylinder(i * 2, -4, 0, 0.25, 3, 24, '#d0c8b8');
+  ids.push(...sketch.solidFaces(s));
+}
+sketch.group(ids, 'Kolom');
+sketch.log('Selesai: ' + ids.length + ' bidang');</textarea>
+        <div class="crow"><button id="conRun">Jalankan (Ctrl+Enter)</button></div>
+        <pre id="conOut"></pre>
+      </div>
+    </main>
+    <aside id="tray" hidden>
+      <div id="trayTabs">
+        <button data-tab="info">Info</button><button data-tab="mat">Material</button><button data-tab="tags">Tag</button>
+        <button data-tab="outliner">Outliner</button><button data-tab="scenes">Adegan</button><button data-tab="styles">Gaya</button>
+        <button data-tab="lib">Pustaka</button>
+      </div>
+      <div class="pane" id="pane-info"></div>
+      <div class="pane" id="pane-mat" hidden>
+        <div class="ttl">Material <span id="matName"></span></div>
+        <div class="msec">Warna</div><div id="matSwatches" class="mgrid"></div>
+        <div class="msec">Tekstur</div><div id="matTextures" class="mgrid tex"></div>
+        <div class="mrow"><button id="matImport">Impor gambar…</button><input type="file" id="matFile" accept="image/*" hidden></div>
+        <div class="mrow texrow">
+          <label>Lebar (m)<input type="number" id="matScale" min="0.01" step="0.1" value="1"></label>
+          <label>Tinggi (m)<input type="number" id="matScaleV" min="0.01" step="0.1" placeholder="= lebar"></label>
+          <label>Sudut (°)<input type="number" id="matRot" step="15" value="0"></label>
+        </div>
+        <div class="mrow"><label>Hasil akhir <select id="matFinish"><option value="matte">Doff</option><option value="glossy">Mengkilap</option><option value="metal">Logam</option><option value="glass">Kaca bening</option></select></label></div>
+        <div class="mnote">Alt+klik bidang: ambil material</div>
+      </div>
+      <div class="pane" id="pane-tags" hidden></div>
+      <div class="pane" id="pane-outliner" hidden></div>
+      <div class="pane" id="pane-scenes" hidden></div>
+      <div class="pane" id="pane-styles" hidden></div>
+      <div class="pane" id="pane-lib" hidden></div>
+    </aside>
+    <footer id="status">
+      <span id="hint"></span>
+      <span id="vcbLabel">Ukuran</span>
+      <div id="vcb"></div>
+    </footer>
+  </div>
+  <script type="module" src="bundle/app.js"></script>
+</body>
+</html>

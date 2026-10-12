@@ -1,0 +1,25 @@
+import * as G from '../geometry.js';
+import { booleanSolids, isClosedSolid } from '../csg.js';
+import * as THREE from 'three';
+const V = (x, y, z) => new THREE.Vector3(x, y, z);
+const pillow = (m, x0) => {
+  const f = G.makeFace(m, [[x0,-0.25,1],[x0+1.4,-0.25,1],[x0+1.4,0.25,1],[x0,0.25,1]], V(0,0,1), '#fbef45'); m.faces.push(f); G.pushPull(m, f.id, 1.6);
+  const top = m.faces.find(q => q.solid === f.solid && q.n[2] > 0.99); G.roundPrism(m, top.id, 0.09);
+  return m.faces[m.faces.length-1].solid;
+};
+const run = (name, fn) => { try { console.log(name, fn()); } catch (e) { console.log(name, 'ERR', e.stack.split('\n').slice(0, 5).join(' | ')); } };
+let m = G.newModel();
+const body = pillow(m, 0);
+run('pillow closed', () => isClosedSolid(m, body));
+const sph = G.primitive(m, 'sphere', [0.5, -0.27, 2], [0,0,1], 0.06, 0, '#a9a032', 20);
+run('sphere closed', () => isClosedSolid(m, sph.sid));
+run('pillow-sphere', () => booleanSolids(m, body, sph.sid, 'subtract'));
+m = G.newModel();
+const b2 = pillow(m, 0);
+G.tessellate(m, new Set(m.faces.filter(q => q.solid === b2).map(q => q.id)), 0.07);
+run('tess closed', () => isClosedSolid(m, b2));
+const s2 = G.primitive(m, 'sphere', [0.5, -0.27, 2], [0,0,1], 0.06, 0, '#a9a032', 20);
+run('tess-sphere', () => booleanSolids(m, b2, s2.sid, 'subtract'));
+m = G.newModel();
+const a = G.primitive(m, 'sphere', [0,0,0], [0,0,1], 0.3, 0, '#f00', 20), b = G.primitive(m, 'sphere', [0.3,0,0], [0,0,1], 0.3, 0, '#f00', 20);
+run('sphere union', () => booleanSolids(m, a.sid, b.sid, 'union'));

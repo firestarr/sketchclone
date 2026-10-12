@@ -1,0 +1,13 @@
+node_modules/
+dist/
+bundle/
+*.log
+# berkas kerja lokal
+spongebob-lama.skc
+spongebob-v2.skc
+spongebob-v3.skc
+spongebob-v4.skc
+spongebob-preview-samping.png
+spongebob.skc
+spongebob-preview.png
+spongebob-perbandingan.png
