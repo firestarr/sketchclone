@@ -19,7 +19,7 @@ Installer belum ditandatangani digital, jadi Windows SmartScreen bisa menampilka
 
 **Bentuk lanjutan** — Bulatkan sudut / semua rusuk, Chamfer, Haluskan permukaan (subdivisi), Lentur / Runcing / Puntir, Pahat (Smoove), Potong bersilangan (Intersect), Solid Tools (gabung, kurangi, irisan), Atap pelana otomatis, Teks 3D, Medan (Sandbox).
 
-**Konstruksi bangunan** — Kusen pintu & jendela yang otomatis melubangi dinding (ikut bergerak bersama dindingnya), alat Ruang (nama + luas m² tampil di model dan denah), lantai bertingkat (elevasi, tampil/sembunyi per lantai), tangga beton + reling antar-lantai (lantai atas otomatis berlubang), denah per lantai di PDF (lengkap dengan busur bukaan pintu), dan **RAB otomatis** dari model: galian, pondasi, sloof, kolom praktis, ring balok, pasangan bata (dikurangi bukaan), plester, acian, cat, keramik, plafon, kusen, daun pintu/jendela, cor dak, rangka & genteng atap, beton & reling tangga — ukuran pondasi dan harga AHSP bisa diubah, ekspor Excel format RAB_Bangunan (panel kanan → **Konstruksi**, atau Berkas → RAB Otomatis).
+**Konstruksi bangunan** — Kusen pintu & jendela yang otomatis melubangi dinding (ikut bergerak bersama dindingnya), alat Ruang (nama + luas m² tampil di model dan denah), lantai bertingkat (elevasi, tampil/sembunyi per lantai), tangga beton + reling antar-lantai bentuk lurus / L / U dengan bordes (lantai atas otomatis berlubang), utilitas listrik & sanitasi (lampu, saklar, stop kontak, AC, exhaust, panel, kloset, wastafel, bak mandi, kran, floor drain, septic tank, tandon, pompa) lengkap dengan simbol di denah dan perkiraan panjang kabel & pipa, denah per lantai di PDF (lengkap dengan busur bukaan pintu), dan **RAB otomatis** dari model: galian, pondasi, sloof, kolom praktis, ring balok, pasangan bata (dikurangi bukaan), plester, acian, cat, keramik, plafon, kusen, daun pintu/jendela, cor dak, rangka & genteng atap, beton & reling tangga, titik listrik, sanitari, kabel & pipa — ukuran pondasi dan harga AHSP bisa diubah, ekspor Excel format RAB_Bangunan (panel kanan → **Konstruksi**, atau Berkas → RAB Otomatis).
 
 **Pengorganisasian** — Grup & Komponen bertaut (bisa bersarang), Salinan cermin bertaut, Tag, Outliner, Adegan + animasi, Sembunyikan/tampilkan, Bidang potong.
 
@@ -45,7 +45,7 @@ Taruh berkas `.js` di folder plugin (menu **Ekstensi → Buka Folder Plugin**):
 sketch.addCommand('Kotak 1 m', () => sketch.box(0, 0, 0, 1, 1, 1, '#d9b27c'));
 ```
 
-API `sketch` juga dipakai Asisten AI: `box`, `roundBox`, `cylinder`, `sphere`, `ellipsoid`, `cone`, `capsule`, `torus`, `face`, `pushPull`, `wall`, `roof`, `library`, `door`, `window`, `wallFaceAt`, `room`, `level`, `stairs`, `pondasi`, `rab`, `paint`, `finish`, `move`, `rotate`, `scaleIds`, `subtract`, `union`, `roundEdges`, `smooth`, `group`, `light`, `style`, `text`, `log`, `toast`, `addCommand`.
+API `sketch` juga dipakai Asisten AI: `box`, `roundBox`, `cylinder`, `sphere`, `ellipsoid`, `cone`, `capsule`, `torus`, `face`, `pushPull`, `wall`, `roof`, `library`, `door`, `window`, `wallFaceAt`, `room`, `level`, `stairs`, `mep`, `pondasi`, `rab`, `paint`, `finish`, `move`, `rotate`, `scaleIds`, `subtract`, `union`, `roundEdges`, `smooth`, `group`, `light`, `style`, `text`, `log`, `toast`, `addCommand`.
 
 ## Mengembangkan
 

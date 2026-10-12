@@ -339,7 +339,7 @@ export function pondasiOf(model, extra) {
 // ---------- tangga beton lurus ----------
 export function stairSpec(H, opt = {}) {
   const n = Math.max(2, Math.round(H / (opt.riser || 0.175)));
-  return { H, n, R: H / n, T: opt.tread || 0.28, w: opt.w || 0.9, waist: opt.waist || 0.12 };
+  return { H, n, R: H / n, T: opt.tread || 0.28, w: opt.w || 0.9, waist: opt.waist || 0.12, shape: opt.shape || 'lurus' };
 }
 // Bangun tangga di koordinat lokal (naik ke +Y, lebar sepanjang X, kaki di y=0), lalu M.
 export function buildStair(m, sp, M) {
@@ -366,13 +366,55 @@ export function buildStair(m, sp, M) {
   if (M) G.applyMatrix(m, ids, M);
   return { ids, conc, run };
 }
+export const STAIR_SHAPES = { lurus: 'Lurus', L: 'Bentuk L (bordes)', U: 'Bentuk U (bordes)' };
+// Tangga lurus / L / U. Lokal: naik ke +Y, lebar sepanjang X, kaki di (0,0,0); L berbelok ke kanan (+X), U berbalik di sebelah kanan.
+export function buildStairShape(m, sp, M) {
+  const shape = sp.shape || 'lurus';
+  const ids = new Set();
+  const take = (r) => r.ids.forEach((id) => ids.add(id));
+  const { w, T, R } = sp;
+  if (shape === 'lurus') {
+    const r = buildStair(m, sp, null);
+    take(r);
+    const outline = [[-w / 2, 0], [w / 2, 0], [w / 2, r.run], [-w / 2, r.run]];
+    G.applyMatrix(m, ids, M);
+    return { ids, outline, flights: [[r.run, sp.H]], landing: 0 };
+  }
+  const n1 = Math.floor(sp.n / 2), n2 = sp.n - n1;
+  const H1 = n1 * R, run1 = n1 * T, run2 = n2 * T;
+  take(buildStair(m, { ...sp, n: n1, H: H1 }, null));
+  const gap = 0.1;
+  const lx1 = shape === 'U' ? 1.5 * w + gap : w / 2;
+  const startL = m.nextId;
+  lbox(m, 0, -w / 2, run1, H1 - 0.15, lx1 + w / 2, w, 0.15, '#cfc9bd');
+  m.faces.filter((f) => f.id >= startL).forEach((f) => ids.add(f.id));
+  const s2 = m.nextId;
+  buildStair(m, { ...sp, n: n2, H: n2 * R }, null);
+  const ids2 = new Set(m.faces.filter((f) => f.id >= s2).map((f) => f.id));
+  const M2 = shape === 'L'
+    ? new THREE.Matrix4().makeRotationZ(-Math.PI / 2).setPosition(w / 2, run1 + w / 2, H1)
+    : new THREE.Matrix4().makeRotationZ(Math.PI).setPosition(w + gap, run1, H1);
+  G.applyMatrix(m, ids2, M2);
+  ids2.forEach((id) => ids.add(id));
+  G.applyMatrix(m, ids, M);
+  const outline = shape === 'L'
+    ? [[-w / 2, 0], [w / 2, 0], [w / 2, run1], [w / 2 + run2, run1], [w / 2 + run2, run1 + w], [-w / 2, run1 + w]]
+    : [[-w / 2, Math.min(0, run1 - run2)], [lx1, Math.min(0, run1 - run2)], [lx1, run1 + w], [-w / 2, run1 + w]];
+  return { ids, outline, flights: [[run1, H1], [run2, n2 * R]], landing: (lx1 + w / 2) * w };
+}
 export function placeStair(m, at, angle, sp, parent = null) {
   const M = new THREE.Matrix4().makeRotationZ(angle).setPosition(at);
-  const r = buildStair(m, sp, M);
+  const r = buildStairShape(m, sp, M);
   for (const f of m.faces) if (r.ids.has(f.id)) f.group = parent;
-  const gid = G.makeGroup(m, r.ids, `Tangga ${sp.n} anak tangga`, false, parent);
-  const fp = [[-sp.w / 2, 0], [sp.w / 2, 0], [sp.w / 2, r.run], [-sp.w / 2, r.run]].map(([x, y]) => new THREE.Vector3(x, y, 0).applyMatrix4(M));
-  m.groups[gid].stair = { n: sp.n, R: +sp.R.toFixed(4), T: sp.T, w: sp.w, H: sp.H, run: +r.run.toFixed(4), fp: fp.map((v) => [+v.x.toFixed(4), +v.y.toFixed(4)]), z: at.z };
+  const shape = sp.shape || 'lurus';
+  const gid = G.makeGroup(m, r.ids, `Tangga ${shape === 'lurus' ? '' : shape + ' '}${sp.n} anak tangga`, false, parent);
+  const fp = r.outline.map(([x, y]) => new THREE.Vector3(x, y, 0).applyMatrix4(M));
+  const area = Math.abs(r.outline.reduce((a, p, i) => { const q = r.outline[(i + 1) % r.outline.length]; return a + p[0] * q[1] - q[0] * p[1]; }, 0)) / 2;
+  m.groups[gid].stair = {
+    shape, n: sp.n, R: +sp.R.toFixed(4), T: sp.T, w: sp.w, H: sp.H, run: +r.flights.reduce((a, f) => a + f[0], 0).toFixed(4),
+    rail: +r.flights.reduce((a, f) => a + Math.hypot(f[0], f[1]), 0).toFixed(3), landing: +r.landing.toFixed(3), area: +area.toFixed(4),
+    fp: fp.map((v) => [+v.x.toFixed(4), +v.y.toFixed(4)]), z: at.z,
+  };
   return { gid, ids: r.ids };
 }
 // Lubangi lantai ruang di atas tangga (bukaan tangga) dan kurangi luasnya.
@@ -391,7 +433,7 @@ export function cutStairVoid(model, gid) {
     const loop = hole.map(([x, y]) => [x, y, z]);
     if (G.newellNormal(loop).z > 0) loop.reverse();
     f.holes.push(loop);
-    const a = st.w * st.run;
+    const a = st.area ?? st.w * st.run;
     g.room.area = +(g.room.area - a).toFixed(3);
     const lab = model.labels.find((l) => l.id === g.room.label);
     if (lab) lab.text = `${g.room.name}
@@ -400,6 +442,86 @@ ${g.room.area.toFixed(2)} m²`;
     return +rid;
   }
   return null;
+}
+
+
+// ---------- utilitas listrik & sanitasi ----------
+// mount: 'ceiling' (menempel plafon), 'wall' (menempel dinding pada ketinggian z), 'floor' (di lantai; boleh menempel dinding)
+// Lokal: punggung benda di y = 0 menghadap dinding, benda menjorok ke +Y, alas di z = 0.
+function lcyl(m, cx, cy, z, r, h, color, seg = 16) {
+  const pts = [...Array(seg)].map((_, i) => [cx + r * Math.cos((i / seg) * Math.PI * 2), cy + r * Math.sin((i / seg) * Math.PI * 2), z]);
+  const f = G.makeFace(m, pts, UP, color);
+  m.faces.push(f);
+  G.pushPull(m, f.id, h);
+  return f.solid;
+}
+const WH = '#f4f4f2', GR = '#8c939b', BL = '#3f7fc4';
+export const MEP = {
+  lampu: { name: 'Titik lampu', icon: '💡', sys: 'listrik', mount: 'ceiling', codes: { '8.1.1.1': 1, '16.5.1.1': 1 }, build: (m) => { lcyl(m, 0, 0, -0.05, 0.11, 0.05, WH, 20); } },
+  saklar: { name: 'Saklar', icon: '⏻', sys: 'listrik', mount: 'wall', z: 1.4, codes: {}, build: (m) => lbox(m, 0, -0.04, 0, -0.04, 0.08, 0.015, 0.08, WH) },
+  stopkontak: { name: 'Stop kontak', icon: '🔌', sys: 'listrik', mount: 'wall', z: 0.3, codes: { '8.1.1.2': 1 }, build: (m) => { lbox(m, 0, -0.04, 0, -0.04, 0.08, 0.015, 0.08, WH); lbox(m, 0, -0.015, 0.015, -0.01, 0.03, 0.004, 0.02, '#333'); } },
+  ac: { name: 'AC split 1 PK', icon: '❄', sys: 'listrik', mount: 'wall', z: 2.3, codes: { '8.5.1.1': 1 }, build: (m) => { lbox(m, 0, -0.4, 0, 0, 0.8, 0.2, 0.28, WH); lbox(m, 0, -0.34, 0.2, 0.03, 0.68, 0.005, 0.04, GR); } },
+  exhaust: { name: 'Exhaust fan', icon: '🌀', sys: 'listrik', mount: 'wall', z: 2.2, codes: { '8.6.1.1': 1 }, build: (m) => lbox(m, 0, -0.13, 0, -0.13, 0.26, 0.05, 0.26, GR) },
+  panel: { name: 'Panel listrik (MCB)', icon: '⚡', sys: 'listrik', mount: 'wall', z: 1.5, codes: { '16.4.1.1': 1 }, build: (m) => lbox(m, 0, -0.15, 0, -0.2, 0.3, 0.1, 0.4, GR) },
+  kloset: { name: 'Kloset duduk', icon: '🚽', sys: 'kotor', mount: 'floor', codes: { '17.3.1.1': 1, '8.7.1.1': 1 }, build: (m) => {
+    lbox(m, 0, -0.19, 0, 0.4, 0.38, 0.17, 0.4, WH);
+    lbox(m, 0, -0.17, 0.17, 0, 0.34, 0.5, 0.4, WH);
+  } },
+  wastafel: { name: 'Wastafel', icon: '🚰', sys: 'kotor', mount: 'floor', codes: { '17.3.2.1': 1, '8.7.1.1': 1 }, build: (m) => {
+    lcyl(m, 0, 0.18, 0, 0.09, 0.7, WH);
+    lbox(m, 0, -0.25, 0, 0.7, 0.5, 0.42, 0.16, WH);
+  } },
+  bakmandi: { name: 'Bak mandi fiber', icon: '🛁', sys: 'air', mount: 'floor', codes: { '17.4.1.1': 1, '8.7.1.1': 1 }, build: (m) => lbox(m, 0, -0.75, 0, 0, 1.5, 0.7, 0.55, '#e9f1f7') },
+  kran: { name: 'Kran air', icon: '🔧', sys: 'air', mount: 'wall', z: 0.8, codes: { '8.7.1.1': 1 }, build: (m) => { lcyl(m, 0, 0.03, -0.02, 0.02, 0.04, '#c0c4c8', 10); lbox(m, 0, -0.01, 0.03, 0, 0.02, 0.1, 0.02, '#c0c4c8'); } },
+  floordrain: { name: 'Floor drain', icon: '⊞', sys: 'kotor', mount: 'floor', codes: { '8.7.2.1': 1 }, build: (m) => lbox(m, 0, -0.06, 0.1, 0, 0.12, 0.12, 0.006, '#9aa1a8') },
+  septictank: { name: 'Septic tank', icon: '⛁', sys: 'septic', mount: 'floor', codes: { '8.3.1.1': 1 }, build: (m) => { lcyl(m, 0, 0.7, -1.5, 0.6, 1.53, GR, 24); } },
+  tandon: { name: 'Tandon air 1000 L', icon: '🛢', sys: 'tandon', mount: 'floor', codes: { '8.9.1.1': 1 }, build: (m) => { lcyl(m, 0, 0.6, 0, 0.55, 1.2, BL, 24); } },
+  pompa: { name: 'Pompa air', icon: '⛲', sys: 'air', mount: 'floor', codes: { '8.8.1.1': 1 }, build: (m) => lbox(m, 0, -0.15, 0.05, 0, 0.3, 0.25, 0.3, BL) },
+};
+
+// Pasang utilitas. n = normal bidang yang diklik (dinding -> menempel dinding).
+export function placeMep(m, kind, at, n, angle, opt = {}) {
+  const it = MEP[kind];
+  const start = m.nextId;
+  it.build(m);
+  const ids = new Set(m.faces.filter((f) => f.id >= start).map((f) => f.id));
+  const p = at.clone();
+  let a = angle;
+  const onWall = n && Math.abs(n.z) < 0.3;
+  if (onWall) a = Math.atan2(n.y, n.x) - Math.PI / 2; // lokal +Y menghadap keluar dinding
+  if (it.mount === 'ceiling') p.z = opt.ceilingZ ?? p.z;
+  else if (it.mount === 'wall') p.z = (opt.levelZ ?? 0) + it.z;
+  else if (onWall) p.z = opt.levelZ ?? p.z;
+  G.applyMatrix(m, ids, new THREE.Matrix4().makeRotationZ(a).setPosition(p));
+  for (const f of m.faces) if (ids.has(f.id)) f.group = opt.parent ?? null;
+  const gid = G.makeGroup(m, ids, it.name, false, opt.parent ?? null);
+  m.groups[gid].mep = { kind, p: [+p.x.toFixed(4), +p.y.toFixed(4), +p.z.toFixed(4)] };
+  return { gid, ids };
+}
+
+// Panjang kabel & pipa: jalur siku (|dx|+|dy|+|dz|) dari sumber ke tiap titik, +10% cadangan.
+function mepPos(g) {
+  return new THREE.Vector3(...g.mep.p).applyMatrix4(new THREE.Matrix4().fromArray(g.m));
+}
+export function mepRuns(model) {
+  const pts = { listrik: [], air: [], kotor: [], septic: [], tandon: [], panel: [] };
+  for (const g of Object.values(model.groups)) {
+    if (!g.mep || !MEP[g.mep.kind]) continue;
+    const it = MEP[g.mep.kind], p = mepPos(g);
+    if (g.mep.kind === 'panel') pts.panel.push(p);
+    else if (it.sys === 'listrik') pts.listrik.push(p);
+    if (it.sys === 'air' || it.sys === 'kotor') pts.air.push(p);
+    if (it.sys === 'kotor') pts.kotor.push(p);
+    if (it.sys === 'septic') pts.septic.push(p);
+    if (it.sys === 'tandon') pts.tandon.push(p);
+  }
+  const man = (a, b) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.z - b.z);
+  const centroid = (arr) => arr.reduce((s, v) => s.add(v), new THREE.Vector3()).multiplyScalar(1 / arr.length);
+  const sum = (arr, src) => (src && arr.length ? arr.reduce((s, v) => s + man(v, src), 0) * 1.1 : 0);
+  const panel = pts.panel[0] || (pts.listrik.length ? centroid(pts.listrik) : null);
+  const tandon = pts.tandon[0] || (pts.air.length ? centroid(pts.air) : null);
+  const septic = pts.septic[0] || null;
+  return { kabel: sum(pts.listrik, panel), air: sum(pts.air, tandon), kotor: sum(pts.kotor, septic), counts: pts };
 }
 
 // ---------- RAB ----------
@@ -464,9 +586,10 @@ export function rabQuantities(model, opt = {}) {
       let vol = 0;
       for (const s2 of sids) if (s2 != null) vol += solidVolume(model, s2);
       add('6.3.1.3', vol);
-      add('7.4.1.1', st.n * (st.T + st.R) * st.w);
-      add('14.3.1.1', Math.hypot(st.run, st.H));
+      add('7.4.1.1', st.n * (st.T + st.R) * st.w + (st.landing || 0));
+      add('14.3.1.1', st.rail ?? Math.hypot(st.run, st.H));
     }
+    if (g.mep && MEP[g.mep.kind]) for (const [code, k] of Object.entries(MEP[g.mep.kind].codes)) add(code, k);
     if (g.roof) {
       let a = 0;
       for (const f of model.faces) if ((f.group ?? null) === +gid && f.n[2] > 0.1) a += G.faceArea(f);
@@ -474,10 +597,15 @@ export function rabQuantities(model, opt = {}) {
       add('14.2.1.1', a);
     }
   }
+  const runs = mepRuns(model);
+  add('8.4.1.1', runs.kabel); // kabel NYM 2.5 mm²
+  add('16.2.1.1', runs.kabel); // pipa conduit
+  add('17.1.1.1', runs.air); // air bersih 1/2"
+  add('17.2.1.2', runs.kotor); // air kotor 4"
   return q;
 }
 
-const ORDER = ['Pekerjaan Tanah', 'Pekerjaan Pondasi', 'Pekerjaan Beton', 'Cor Dak', 'Konstruksi Baja', 'Pekerjaan Dinding', 'Pekerjaan Plester', 'Pekerjaan Kayu', 'Pekerjaan Lantai', 'Pekerjaan Plafon', 'Baja Ringan', 'Pekerjaan Atap', 'Pekerjaan Cat'];
+const ORDER = ['Pekerjaan Tanah', 'Pekerjaan Pondasi', 'Pekerjaan Beton', 'Cor Dak', 'Konstruksi Baja', 'Pekerjaan Dinding', 'Pekerjaan Plester', 'Pekerjaan Kayu', 'Pekerjaan Lantai', 'Pekerjaan Plafon', 'Baja Ringan', 'Pekerjaan Atap', 'Pekerjaan Cat', 'Pekerjaan Listrik', 'Kabel Listrik', 'Pipa Instalasi', 'Panel Listrik', 'Lampu', 'Pekerjaan AC', 'Pekerjaan Ventilasi', 'Pekerjaan Plumbing', 'Pipa Air Bersih', 'Pipa Air Kotor', 'Sanitari', 'Pekerjaan Sanitasi', 'Pekerjaan Pompa', 'Pekerjaan Tandon'];
 
 export function rabRows(model, opt = {}) {
   const q = rabQuantities(model, opt);

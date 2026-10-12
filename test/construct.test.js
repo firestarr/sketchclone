@@ -84,3 +84,34 @@ ok(o3 && Math.abs(o3.area - exp) < 0.03 && o3.pts.length === 6, 'denah L ' + (o3
   m3.rab = { pondasi: { top: 0.4, bot: 0.8, h: 1 } };
   ok(Math.abs(C.pondasiOf(m3).stone - 0.6) < 1e-9, 'ukuran pondasi dari model');
 }
+// tangga L & U
+for (const shape of ['L', 'U']) {
+  const m4 = G.normalizeModel({ faces: [], lines: [], nextId: 1 });
+  const sp = C.stairSpec(3, { shape });
+  const st = C.placeStair(m4, new THREE.Vector3(0, 0, 0), 0, sp);
+  const b = G.bboxOf(m4);
+  const meta = m4.groups[st.gid].stair;
+  ok(Math.abs(b.max.z - 3 - 0.93) < 0.01 && meta.landing > 0, `tangga ${shape}: tinggi ${(b.max.z - 0.93).toFixed(2)}, bordes ${meta.landing} m², tapak ${meta.area} m², bbox ${b.min.x.toFixed(2)}..${b.max.x.toFixed(2)} x ${b.min.y.toFixed(2)}..${b.max.y.toFixed(2)}`);
+  // puncak tangga kedua harus setinggi 3 m
+  const topZ = Math.max(...m4.faces.filter((f) => !f.finish).flatMap((f) => f.pts.map((p) => p[2])));
+  ok(Math.abs(topZ - 3) < 1e-6, `puncak beton ${shape} = ${topZ}`);
+}
+// utilitas
+{
+  const m5 = G.normalizeModel({ faces: [], lines: [], nextId: 1 });
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  C.placeMep(m5, 'panel', V(0, 0, 0), V(0, 1, 0), 0, { levelZ: 0 });
+  C.placeMep(m5, 'lampu', V(2, 2, 0), V(0, 0, 1), 0, { ceilingZ: 2.8 });
+  C.placeMep(m5, 'stopkontak', V(3, 0, 1), V(0, 1, 0), 0, { levelZ: 0 });
+  const k = C.placeMep(m5, 'kloset', V(5, 0, 0), V(0, 1, 0), 0, { levelZ: 0 });
+  C.placeMep(m5, 'septictank', V(5, -3, 0), V(0, 0, 1), 0, { levelZ: 0 });
+  const b = G.bboxOf(m5, k.ids);
+  ok(b.min.y > -1e-6 && b.max.y < 0.7, 'kloset menempel dinding, menjorok +Y');
+  const lb = G.bboxOf(m5, new Set(m5.faces.filter((f) => m5.groups[f.group]?.mep?.kind === 'lampu').map((f) => f.id)));
+  ok(Math.abs(lb.max.z - 2.8) < 1e-6, 'lampu menempel plafon');
+  const runs = C.mepRuns(m5);
+  ok(Math.abs(runs.kabel - ((2 + 2 + 2.8 - 1.5) + (3 + 0 + 1.2)) * 1.1) < 1e-6, 'panjang kabel ' + runs.kabel.toFixed(2));
+  ok(Math.abs(runs.kotor - 3 * 1.1) < 1e-6, 'pipa air kotor ' + runs.kotor.toFixed(2));
+  const rr = Object.fromEntries(C.rabRows(m5).map((x) => [x.key, x]));
+  ok(rr['8.1.1.1'].vol === 1 && rr['8.1.1.2'].vol === 1 && rr['17.3.1.1'].vol === 1 && rr['8.3.1.1'] && rr['8.4.1.1'] && rr['17.2.1.2'], 'RAB utilitas');
+}

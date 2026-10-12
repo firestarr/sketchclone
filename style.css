@@ -167,3 +167,7 @@ table.rab input { width: 72px; font-size: 11px; }
 #tray .pdgrid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; margin: 4px 0; }
 #tray .pdgrid label { display: flex; flex-direction: column; font-size: 11px; color: #556; }
 #tray .pdgrid input { width: 100%; }
+#tray .mepgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 4px 0 6px; }
+#tray .mepgrid button { display: flex; align-items: center; gap: 5px; text-align: left; font-size: 11px; padding: 4px 5px; }
+#tray .mepgrid .ic { font-size: 15px; width: 18px; text-align: center; }
+#tray select.stshape { width: auto; max-width: 140px; }

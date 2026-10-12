@@ -2115,8 +2115,29 @@ function nextLevelHeight() {
   const L = C.levelsOf(model), i = Math.min(model.activeLevel || 0, L.length - 1);
   return L[i + 1] ? L[i + 1].z - L[i].z : L[i].h;
 }
+let stairShape = 'lurus';
+function ceilingZ() {
+  const z = curLevel().z, sz = roomSliceZ(z);
+  return sz - z > 1.01 ? sz + 0.1 : z + 2.8;
+}
+function placeMepTool(kind) {
+  const it = C.MEP[kind];
+  toast(`${it.name}: klik ${it.mount === 'ceiling' ? 'lantai/plafon ruangan (dipasang di plafon)' : it.mount === 'wall' ? `bidang dinding (tinggi ${fmt(it.z)} dari lantai)` : 'lantai, atau dinding agar punggungnya menempel'}. Panah kiri/kanan memutar.`);
+  startPlace({
+    label: it.name,
+    gen: (m, at, n, angle) => {
+      const real = m === model;
+      const opt = real
+        ? { levelZ: curLevel().z, ceilingZ: ceilingZ(), parent: editGroup }
+        : { levelZ: it.mount === 'wall' ? -it.z : 0, ceilingZ: 0 };
+      const r = C.placeMep(m, kind, at, n, angle, opt);
+      if (real) levelTag(r.gid);
+      return r;
+    },
+  });
+}
 function placeStairTool(opt = {}) {
-  const sp = C.stairSpec(nextLevelHeight(), opt);
+  const sp = C.stairSpec(nextLevelHeight(), { shape: stairShape, ...opt });
   toast(`Tangga ${sp.n} anak tangga (optrede ${fmt(sp.R)}, antrede ${fmt(sp.T)}), panjang ${fmt(sp.n * sp.T)}. Klik kaki tangga; panah kiri/kanan memutar.`);
   startPlace({
     label: 'Tangga',
@@ -4635,11 +4656,18 @@ const sketch = {
     return i;
   },
   rab() { return C.rabRows(model); },
-  stairs(x, y, angleDeg = 0, w = 0.9) {
+  stairs(x, y, angleDeg = 0, w = 0.9, shape = 'lurus') {
     const z = curLevel().z;
-    const r = C.placeStair(model, new THREE.Vector3(x, y, z), (angleDeg * Math.PI) / 180, C.stairSpec(nextLevelHeight(), { w }), editGroup);
+    const r = C.placeStair(model, new THREE.Vector3(x, y, z), (angleDeg * Math.PI) / 180, C.stairSpec(nextLevelHeight(), { w, shape }), editGroup);
     levelTag(r.gid);
     C.cutStairVoid(model, r.gid);
+    return r.gid;
+  },
+  mep(kind, x, y, z, wallNormal = null, angleDeg = 0) {
+    if (!C.MEP[kind]) throw new Error('utilitas tidak ada: ' + kind + ' (pilihan: ' + Object.keys(C.MEP).join(', ') + ')');
+    const z0 = z ?? curLevel().z;
+    const r = C.placeMep(model, kind, new THREE.Vector3(x, y, z0), wallNormal ? V3(wallNormal) : new THREE.Vector3(0, 0, 1), (angleDeg * Math.PI) / 180, { levelZ: curLevel().z, ceilingZ: ceilingZ(), parent: editGroup });
+    levelTag(r.gid);
     return r.gid;
   },
   pondasi(p) { model.rab ||= {}; model.rab.pondasi = { ...(model.rab.pondasi || {}), ...p }; return C.pondasiOf(model); },
@@ -5477,6 +5505,7 @@ async function exportDrawing() {
     .plan { position: absolute; left: 12mm; top: 12mm; width: 396mm; height: 250mm; }
     .plan img, .plan svg { position: absolute; inset: 0; width: 100%; height: 100%; }
     .plan .cut { stroke: #111; stroke-width: 5; stroke-linecap: square; }
+    .plan .mep circle { fill: #fff; stroke: #1f5fa8; stroke-width: 2; } .plan .mep path { stroke: #1f5fa8; stroke-width: 2; } .plan .mep text { fill: #1f5fa8; font-size: 12px; font-weight: 700; }
     .plan .leaf { stroke: #111; stroke-width: 3; } .plan .swing { stroke: #555; stroke-width: 1.5; fill: none; stroke-dasharray: 8 5; }
     .plan .rn { font-size: 22px; font-weight: 700; fill: #1d2b3a; } .plan .ra { font-size: 19px; fill: #44515f; }
     .plan .dim line { stroke: #c0392b; stroke-width: 2; } .plan .dim text { fill: #c0392b; font-size: 22px; font-weight: 600; }
@@ -5532,6 +5561,17 @@ function planSheets(vis) {
       swings += `<line class="leaf" x1="${hx.toFixed(1)}" y1="${hy.toFixed(1)}" x2="${ox.toFixed(1)}" y2="${oy.toFixed(1)}"/><path class="swing" d="M${sx.toFixed(1)} ${sy.toFixed(1)} A${rr.toFixed(1)} ${rr.toFixed(1)} 0 0 ${sweep} ${ox.toFixed(1)} ${oy.toFixed(1)}"/>`;
     }
     const lines = segs.map(([a, b]) => { const p = sp(a[0], a[1], cutZ), q = sp(b[0], b[1], cutZ); return `<line class="cut" x1="${p[0].toFixed(1)}" y1="${p[1].toFixed(1)}" x2="${q[0].toFixed(1)}" y2="${q[1].toFixed(1)}"/>`; }).join('');
+    const ABBR = { lampu: 'L', saklar: 'S', stopkontak: 'SK', ac: 'AC', exhaust: 'EF', panel: 'P', kloset: 'WC', wastafel: 'WT', bakmandi: 'BM', kran: 'K', floordrain: 'FD', septictank: 'ST', tandon: 'TA', pompa: 'PA' };
+    let mepSyms = '';
+    for (const g of Object.values(model.groups)) {
+      if (!g.mep || !ABBR[g.mep.kind]) continue;
+      const pw = V3(g.mep.p).applyMatrix4(new THREE.Matrix4().fromArray(g.m));
+      const zz = C.MEP[g.mep.kind]?.mount === 'ceiling' ? pw.z - 0.01 : pw.z; // lampu plafon milik lantai di bawahnya
+      if (zz < (li === 0 ? lv.z - 1.6 : lv.z - 0.005) || zz >= lv.z + lv.h - 0.005) continue;
+      const [x, y] = sp(pw.x, pw.y, lv.z);
+      const lamp = g.mep.kind === 'lampu';
+      mepSyms += `<g class="mep"><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="13"/>${lamp ? `<path d="M${x - 9} ${y - 9}L${x + 9} ${y + 9}M${x + 9} ${y - 9}L${x - 9} ${y + 9}"/>` : `<text x="${x.toFixed(1)}" y="${(y + 5).toFixed(1)}" text-anchor="middle">${ABBR[g.mep.kind]}</text>`}</g>`;
+    }
     let area = 0;
     const rooms = Object.entries(model.groups).filter(([gid, g]) => g.room && Math.abs(g.room.z - lv.z) < 0.1 && vis({ group: +gid })).map(([, g]) => {
       area += g.room.area;
@@ -5550,7 +5590,7 @@ function planSheets(vis) {
       <text x="${x - 12}" y="${(t + b) / 2}" text-anchor="middle" transform="rotate(-90 ${x - 12} ${(t + b) / 2})">${escHtml(fmt(size.y))}</text></g>`;
     out.push({
       title: 'DENAH ' + lv.name.toUpperCase(), N, area: area ? area.toFixed(2) + ' m²' : '-',
-      body: `<img src="${data}"><svg viewBox="0 0 ${W} ${H}">${lines}${swings}${rooms}${dims}</svg>`,
+      body: `<img src="${data}"><svg viewBox="0 0 ${W} ${H}">${lines}${swings}${mepSyms}${rooms}${dims}</svg>`,
     });
   });
   return out;
@@ -5593,9 +5633,19 @@ function renderKonsPane() {
   P.append(mkEl('div', { className: 'btnrow' },
     mkEl('button', { textContent: '+ Tambah lantai', onclick: addLevel }),
     mkEl('button', { textContent: '+ Tangga', title: 'Tangga beton dari lantai aktif ke lantai di atasnya', onclick: () => placeStairTool() }),
+    mkEl('select', { className: 'stshape', title: 'Bentuk tangga', onchange: (e) => { stairShape = e.target.value; } }, ...Object.entries(C.STAIR_SHAPES).map(([k, v]) => mkEl('option', { value: k, textContent: v, selected: stairShape === k }))),
     mkEl('button', { textContent: 'Hanya lantai aktif', disabled: L.length < 2, onclick: () => { L.forEach((lv, i) => { const t = model.tags.find((x) => x.id === lv.tag); if (t) t.visible = i === (model.activeLevel || 0); }); snapCache = null; changed(); } }),
     mkEl('button', { textContent: 'Semua', disabled: L.length < 2, onclick: () => { L.forEach((lv) => { const t = model.tags.find((x) => x.id === lv.tag); if (t) t.visible = true; }); snapCache = null; changed(); } }),
   ));
+  P.append(mkEl('div', { className: 'ttl', textContent: 'Listrik & Sanitasi' }));
+  P.append(mkEl('div', { className: 'mepgrid' }, ...Object.entries(C.MEP).map(([k, it]) => {
+    const cnt = Object.values(model.groups).filter((g) => g.mep?.kind === k).length;
+    return mkEl('button', { title: `Tempatkan ${it.name}`, onclick: () => placeMepTool(k) }, mkEl('span', { className: 'ic', textContent: it.icon }), mkEl('span', { textContent: it.name + (cnt ? ` (${cnt})` : '') }));
+  })));
+  {
+    const runs = C.mepRuns(model);
+    if (runs.kabel || runs.air || runs.kotor) P.append(mkEl('div', { className: 'muted small', textContent: `Perkiraan jalur: kabel ${runs.kabel.toFixed(1)} m · pipa air bersih ${runs.air.toFixed(1)} m · pipa air kotor ${runs.kotor.toFixed(1)} m (jalur siku dari panel / tandon / septic tank, +10%)` }));
+  }
   P.append(mkEl('div', { className: 'ttl', textContent: 'Ruang' }));
   const rooms = Object.entries(model.groups).filter(([, g]) => g.room);
   if (!rooms.length) P.append(mkEl('div', { className: 'muted small', textContent: 'Pakai alat Ruang lalu klik di dalam ruangan untuk menghitung luasnya.' }));
@@ -6149,7 +6199,7 @@ window.__sk = {
   setSelection: (ids) => { selection = new Set(ids); refresh(); updateInfo(); },
   type: (t) => { vcbText = t; tool.onVCB && tool.onVCB(vcbText); vcbText = ''; renderVCB(); },
   key: (k) => window.dispatchEvent(new KeyboardEvent('keydown', { key: k })),
-  undo, redo, loadModel, setShadows, solidOp, runScript, sketch, textures, setMat, getCurMat: () => curMat, pluginCommands, applyArray, getLastArray: () => lastArray, C, placeStairTool, exportRab, renderKonsPane, addLevel, curLevel, planSheets, roomSliceZ, loadOnlineLib, placeOnline, insertModelAsComponent, exportSelectionComponent, getOnlineLib: () => onlineLib, exportWebViewer, shareToPhone, viewerHtml, runAi, openAi, aiContext, openVersions, newFromTemplate, openKeys, saveKeys, keyTools, recordVideo, sky, exportDrawing, bomData, exportBom, exportDXF, intersectSel, roofSel, showGrips, gripState: () => gripState, fastIds: () => fastIds, openDeform, applyDeform, tessellateSel, mirrorLinked, splinePoints, subdivideSel, roundAllSel, mirrorSel, importReference, filletSel, fitTexture, texMapper, editTexture, exportPNG, serializeProject, applyProjectData, startPlace, LIBRARY, insertLibrary, getFont, textShapes, buildText3D, confirmText3D, getPlaceGen: () => placeGen, boxSelect, openCtx, zoomSelection, fmt, parseNums, eyePos, walkBy, turnView, importMesh, exportGLB, addScene, goScene, showTray, hideSelection, unhideAll, cmd: handleMenu, enterEdit, exitEdit, editGroup: () => editGroup, sunState, styleOf, setStyle, refresh,
+  undo, redo, loadModel, setShadows, solidOp, runScript, sketch, textures, setMat, getCurMat: () => curMat, pluginCommands, applyArray, getLastArray: () => lastArray, C, placeStairTool, placeMepTool, setStairShape: (v) => (stairShape = v), exportRab, renderKonsPane, addLevel, curLevel, planSheets, roomSliceZ, loadOnlineLib, placeOnline, insertModelAsComponent, exportSelectionComponent, getOnlineLib: () => onlineLib, exportWebViewer, shareToPhone, viewerHtml, runAi, openAi, aiContext, openVersions, newFromTemplate, openKeys, saveKeys, keyTools, recordVideo, sky, exportDrawing, bomData, exportBom, exportDXF, intersectSel, roofSel, showGrips, gripState: () => gripState, fastIds: () => fastIds, openDeform, applyDeform, tessellateSel, mirrorLinked, splinePoints, subdivideSel, roundAllSel, mirrorSel, importReference, filletSel, fitTexture, texMapper, editTexture, exportPNG, serializeProject, applyProjectData, startPlace, LIBRARY, insertLibrary, getFont, textShapes, buildText3D, confirmText3D, getPlaceGen: () => placeGen, boxSelect, openCtx, zoomSelection, fmt, parseNums, eyePos, walkBy, turnView, importMesh, exportGLB, addScene, goScene, showTray, hideSelection, unhideAll, cmd: handleMenu, enterEdit, exitEdit, editGroup: () => editGroup, sunState, styleOf, setStyle, refresh,
   mouse(type, x, y, z, extra = {}) {
     const p = this.project(x, y, z);
     if (!p) return;
