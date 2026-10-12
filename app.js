@@ -8,6 +8,7 @@ import { zipSync, strToU8 } from 'fflate';
 import QRCode from 'qrcode';
 import { LIBRARY, insertLibrary } from './library.js';
 import * as C from './construct.js';
+import * as PR from './production.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
@@ -4846,7 +4847,7 @@ document.querySelectorAll('#trayTabs button').forEach((b) => (b.onclick = () => 
 
 function renderTray() {
   if ($('tray').hidden) return;
-  const fn = { lib: renderLibPane, info: renderInfoPane, mat: renderMatPanel, tags: renderTagsPane, outliner: renderOutliner, scenes: renderScenesPane, styles: renderStylesPane, kons: renderKonsPane }[trayTab];
+  const fn = { lib: renderLibPane, info: renderInfoPane, mat: renderMatPanel, tags: renderTagsPane, outliner: renderOutliner, scenes: renderScenesPane, styles: renderStylesPane, kons: renderKonsPane, prod: renderProdPane }[trayTab];
   fn && fn();
 }
 
@@ -5736,6 +5737,208 @@ function sectionSheets(vis, box) {
   return [{ title: 'POTONGAN', N, k3: 'GARIS POTONG', area: 'lihat denah', grid: `<div class="cell2">${cells.join('')}</div>` }];
 }
 
+// ======================= Produksi: mebel, cetak 3D, pola datar =======================
+const prodOpt = () => {
+  model.prod ||= {};
+  const o = model.prod;
+  o.sheet ||= { w: 2440, h: 1220, kerf: 3, rotate: true };
+  o.prices ||= {}; // harga per lembar menurut tebal (mm)
+  o.cab ||= { w: 80, h: 180, d: 40, shelves: 3, doors: 2, t: 18 };
+  o.print ||= { scale: 1, material: 'PLA', infill: 20, pricePerKg: 200000, bed: [220, 220, 250] };
+  o.net ||= { tab: 8 };
+  return o;
+};
+// lingkup: benda terpilih, atau semua yang tampak
+function prodSids() {
+  const vis = makeVisible(model);
+  const ids = selection.size ? expand(selection) : null;
+  return [...new Set(model.faces.filter((f) => f.solid != null && vis(f) && (!ids || ids.has(f.id))).map((f) => f.solid))];
+}
+function prodCutList() {
+  const sids = new Set(prodSids());
+  const nameOf = (f) => f.pname || (f.group != null ? model.groups[f.group]?.name : null);
+  return PR.cutList(model, (f) => sids.has(f.solid), nameOf);
+}
+function prodNesting(cl) {
+  const o = prodOpt();
+  const byT = {};
+  for (const r of cl.rows) (byT[r.T] ||= []).push(r);
+  return Object.entries(byT).sort((a, b) => b[0] - a[0]).map(([T, rows]) => {
+    const nr = PR.nest(rows, o.sheet.w, o.sheet.h, o.sheet.kerf, o.sheet.rotate);
+    const price = o.prices[T] || 0;
+    return { T: +T, rows, nr, price, cost: price * nr.sheets.length };
+  });
+}
+function hardwareSum() {
+  const hw = { engsel: 0, handle: 0, sekrup: 0, dowel: 0 };
+  for (const g of Object.values(model.groups)) if (g.furniture?.hardware) for (const k in hw) hw[k] += g.furniture.hardware[k] || 0;
+  return hw;
+}
+function sheetSvg(nr, s, Wpx) {
+  const sc = Wpx / nr.sheetW, H = nr.sheetH * sc;
+  const cols = ['#f6d7a7', '#cfe3c8', '#c9dcf0', '#f3c9c9', '#e1d3f0', '#f0e6b8'];
+  const parts = s.parts.map((p, i) => {
+    const fs = Math.max(7, Math.min(13, Math.min(p.w, p.h) * sc * 0.35));
+    return `<rect x="${(p.x * sc).toFixed(1)}" y="${(p.y * sc).toFixed(1)}" width="${(p.w * sc).toFixed(1)}" height="${(p.h * sc).toFixed(1)}" fill="${cols[i % cols.length]}" stroke="#555" stroke-width="0.8"/>` +
+      `<text x="${((p.x + p.w / 2) * sc).toFixed(1)}" y="${((p.y + p.h / 2) * sc + fs / 3).toFixed(1)}" font-size="${fs.toFixed(1)}" text-anchor="middle" fill="#333">${p.label} ${Math.round(p.rot ? p.h : p.w)}×${Math.round(p.rot ? p.w : p.h)}</text>`;
+  }).join('');
+  return `<svg viewBox="-1 -1 ${Wpx + 2} ${H + 2}" width="100%" xmlns="http://www.w3.org/2000/svg"><rect x="0" y="0" width="${Wpx}" height="${H}" fill="#fff" stroke="#222" stroke-width="1.2"/>${parts}</svg>`;
+}
+function placeCabinet() {
+  const c = prodOpt().cab;
+  const o = { w: c.w / 100, h: c.h / 100, d: c.d / 100, shelves: c.shelves, doors: c.doors, t: c.t / 1000 };
+  const label = `Kabinet ${c.w}×${c.h}×${c.d} cm`;
+  toast(`${label}: klik lantai untuk menaruh (panah kiri/kanan memutar)`);
+  startPlace({
+    label,
+    gen: (m, at, n, angle) => {
+      const r = PR.buildCabinet(m, o);
+      G.applyMatrix(m, r.ids, new THREE.Matrix4().makeRotationZ(angle).setPosition(at));
+      if (m !== model) return r;
+      for (const f of m.faces) if (r.ids.has(f.id)) f.group = editGroup;
+      const gid = G.makeGroup(m, r.ids, label, false, editGroup);
+      m.groups[gid].furniture = { kind: 'kabinet', ...c, hardware: r.hardware };
+      return { ids: r.ids, gid };
+    },
+  });
+}
+function selectedSolid() {
+  const s = prodSids();
+  return s.length === 1 ? s[0] : null;
+}
+let lastNet = null;
+function buildNet() {
+  const sid = selectedSolid();
+  if (sid == null) return toast('Pilih satu benda (mis. kotak kemasan) dulu');
+  const u = PR.unfold(model, sid, { tab: prodOpt().net.tab / 1000 });
+  if (!u) return toast('Benda ini tidak bisa dibuka (bidangnya berlubang)');
+  lastNet = { ...PR.netLayout(u.pieces), placed: u.placed, faces: u.faces, pieces: u.pieces.length };
+  renderTray();
+  toast(`Pola datar: ${u.pieces.length} potongan, ${(lastNet.W * 1000).toFixed(0)} × ${(lastNet.H * 1000).toFixed(0)} mm`);
+}
+async function exportNet(kind) {
+  if (!lastNet) buildNet();
+  if (!lastNet) return;
+  const name = (filePath ? filePath.split(/[\\/]/).pop().replace(/\.skc$/, '') : 'pola') + ' - pola datar';
+  if (kind === 'svg') return (await window.api.exportFile('svg', PR.netSvg(lastNet, 1, { hair: true }), name + '.svg')) && toast('Pola SVG (ukuran asli, garis tipis untuk laser) disimpan');
+  if (kind === 'dxf') return (await window.api.exportFile('dxf', PR.netDxf(lastNet), name + '.dxf')) && toast('Pola DXF disimpan (layer POTONG & LIPAT)');
+  // PDF ukuran asli 1:1
+  const wmm = lastNet.W * 1000 + 10, hmm = lastNet.H * 1000 + 10;
+  const fits = (a, b) => (wmm <= a && hmm <= b) || (wmm <= b && hmm <= a);
+  const page = fits(200, 287) ? 'A4' : fits(287, 410) ? 'A3' : null;
+  if (!page) return toast(`Pola ${wmm.toFixed(0)}×${hmm.toFixed(0)} mm lebih besar dari A3 — pakai SVG/DXF untuk mesin`);
+  const land = page === 'A4' ? wmm > 200 : wmm > 287;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>@page{size:${page} ${land ? 'landscape' : 'portrait'};margin:8mm}body{margin:0;font-family:Segoe UI,Arial,sans-serif;font-size:9pt}</style></head><body>${PR.netSvg(lastNet, 1)}<div>Cetak skala 100% (tanpa "fit to page"). Garis merah = potong, biru putus-putus = lipat. ${escHtml(name)}</div></body></html>`;
+  const out = await window.api.savePdf(html, name + '.pdf', { pageSize: page, landscape: land, margins: true });
+  out && toast('Pola PDF ukuran asli disimpan — cetak dengan skala 100%');
+}
+async function exportCutPdf(toFile = true) {
+  const cl = prodCutList();
+  if (!cl.rows.length) return toast('Tidak ada panel/papan di pilihan ini');
+  const groups = prodNesting(cl), hw = hardwareSum(), o = prodOpt();
+  const rp = (v) => v.toLocaleString('id-ID');
+  const date = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+  const name = filePath ? filePath.split(/[\\/]/).pop().replace(/\.skc$/, '') : 'Proyek mebel';
+  const rows = cl.rows.map((r) => `<tr><td>${r.code}</td><td>${escHtml(r.name)}</td><td class="n">${r.L}</td><td class="n">${r.W}</td><td class="n">${r.T}</td><td class="n">${r.qty}</td></tr>`).join('');
+  const sheets = groups.map((g) => `<h3>Papan ${g.T} mm — ${g.nr.sheets.length} lembar ${o.sheet.w}×${o.sheet.h} mm${g.price ? ` · Rp ${rp(g.cost)}` : ''}</h3>` + g.nr.sheets.map((s2, i) => `<div class="sh"><div>Lembar ${i + 1} · terpakai ${(s2.used * 100).toFixed(0)}%</div>${sheetSvg(g.nr, s2, 640)}</div>`).join('')).join('');
+  const hwRows = Object.entries({ 'Engsel sendok': hw.engsel, 'Handle / tarikan': hw.handle, 'Sekrup': hw.sekrup, 'Dowel / pin rak': hw.dowel }).filter(([, v]) => v).map(([k, v]) => `<tr><td>${k}</td><td class="n">${v}</td></tr>`).join('');
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>@page{size:A4 portrait;margin:12mm}body{font-family:"Segoe UI",Arial,sans-serif;font-size:9.5pt}h1{font-size:14pt;margin:0}table{border-collapse:collapse;width:100%;margin:3mm 0}td,th{border:.2mm solid #999;padding:1mm 1.5mm}th{background:#e9eef4}.n{text-align:right}.sh{page-break-inside:avoid;margin:2mm 0 4mm}</style></head><body>
+  <h1>DAFTAR POTONG & TATA LETAK LEMBAR</h1><div>${escHtml(name)} · ${escHtml(date)} · celah gergaji ${o.sheet.kerf} mm · ${o.sheet.rotate ? 'boleh diputar' : 'arah serat dijaga'}</div>
+  <table><tr><th>Kode</th><th>Nama</th><th>Panjang (mm)</th><th>Lebar (mm)</th><th>Tebal (mm)</th><th>Jml</th></tr>${rows}</table>
+  ${hwRows ? `<h3>Perlengkapan (hardware)</h3><table><tr><th>Barang</th><th>Jumlah</th></tr>${hwRows}</table>` : ''}
+  ${sheets}</body></html>`;
+  if (!toFile) return { html, groups, cl };
+  const out = await window.api.savePdf(html, name + ' - daftar potong.pdf', { pageSize: 'A4', landscape: false, margins: true });
+  out && toast('Daftar potong & tata letak lembar (PDF) disimpan');
+}
+async function exportCutXlsx() {
+  const cl = prodCutList();
+  if (!cl.rows.length) return toast('Tidak ada panel/papan di pilihan ini');
+  const groups = prodNesting(cl), hw = hardwareSum();
+  const rows = [['DAFTAR POTONG'], [], ['Kode', 'Nama', 'Panjang (mm)', 'Lebar (mm)', 'Tebal (mm)', 'Jumlah', 'Luas (m²)'], ...cl.rows.map((r) => [r.code, r.name, r.L, r.W, r.T, r.qty, +((r.L * r.W * r.qty) / 1e6).toFixed(3)])];
+  const sum = [['KEBUTUHAN LEMBAR'], [], ['Tebal (mm)', 'Jumlah lembar', 'Pemakaian rata-rata (%)', 'Harga/lembar', 'Total'], ...groups.map((g) => [g.T, g.nr.sheets.length, +(100 * g.nr.sheets.reduce((a, s2) => a + s2.used, 0) / Math.max(1, g.nr.sheets.length)).toFixed(1), g.price, g.cost]), [], ['PERLENGKAPAN'], ['Engsel', hw.engsel], ['Handle', hw.handle], ['Sekrup', hw.sekrup], ['Dowel', hw.dowel]];
+  const bytes = xlsx([{ name: 'Daftar Potong', rows, bold: new Set([0, 2]), widths: [7, 20, 13, 11, 11, 9, 10] }, { name: 'Lembar & Hardware', rows: sum, bold: new Set([0, 2]), widths: [16, 15, 22, 14, 14] }]);
+  const out = await window.api.exportBinary('xlsx', bytes, 'daftar potong.xlsx');
+  out && toast('Daftar potong (Excel) disimpan');
+}
+async function exportPrint(kind) {
+  const sids = prodSids();
+  if (!sids.length) return toast('Tidak ada benda untuk dicetak');
+  const sc = prodOpt().print.scale;
+  if (kind === 'stl') return (await window.api.exportFile('stl', PR.exportSTLmm(model, sids, sc), 'model cetak.stl')) && toast('STL (mm) disimpan');
+  const files = PR.export3MF(model, sids, sc);
+  const bytes = zipSync(Object.fromEntries(Object.entries(files).map(([k, v]) => [k, strToU8(v)])));
+  (await window.api.exportBinary('3mf', bytes, 'model cetak.3mf')) && toast('3MF (mm) disimpan');
+}
+
+function renderProdPane() {
+  const P = $('pane-prod');
+  P.replaceChildren();
+  const o = prodOpt();
+  const num = (obj, k, label, step = 1, min = 0, after = () => {}) => mkEl('label', {}, label, mkEl('input', { type: 'number', step, min, value: obj[k], onchange: (e) => { obj[k] = Math.max(min, +e.target.value || 0); after(); renderTray(); } }));
+  const scope = selection.size ? 'benda terpilih' : 'semua benda yang tampak';
+  // ---------- Mebel ----------
+  P.append(mkEl('div', { className: 'ttl', textContent: 'Mebel & daftar potong' }));
+  P.append(mkEl('div', { className: 'pdgrid' }, num(o.cab, 'w', 'Lebar (cm)'), num(o.cab, 'h', 'Tinggi (cm)'), num(o.cab, 'd', 'Dalam (cm)'), num(o.cab, 'shelves', 'Rak'), num(o.cab, 'doors', 'Pintu'), num(o.cab, 't', 'Tebal (mm)')));
+  P.append(mkEl('div', { className: 'btnrow' }, mkEl('button', { textContent: '+ Tempatkan kabinet / lemari', onclick: placeCabinet })));
+  const cl = prodCutList();
+  if (!cl.rows.length) P.append(mkEl('div', { className: 'muted small', textContent: `Belum ada panel papan pada ${scope}. Buat kabinet di atas, atau gambar papan sebagai balok tipis (tebal ≤ 4 cm).` }));
+  else {
+    P.append(mkEl('div', { className: 'muted small', textContent: `Daftar potong dari ${scope} (${cl.rows.reduce((a, r) => a + r.qty, 0)} panel):` }));
+    P.append(mkEl('table', { className: 'rab' },
+      mkEl('tr', {}, ...['Kode', 'Nama', 'P × L × T (mm)', 'Jml'].map((h) => mkEl('th', { textContent: h }))),
+      ...cl.rows.map((r) => mkEl('tr', {}, mkEl('td', { textContent: r.code }), mkEl('td', { textContent: r.name }), mkEl('td', { className: 'num', textContent: `${r.L}×${r.W}×${r.T}` }), mkEl('td', { className: 'num', textContent: r.qty })))));
+    P.append(mkEl('div', { className: 'msec', textContent: 'Lembar papan' }));
+    P.append(mkEl('div', { className: 'pdgrid' }, num(o.sheet, 'w', 'Panjang (mm)', 10), num(o.sheet, 'h', 'Lebar (mm)', 10), num(o.sheet, 'kerf', 'Celah gergaji', 0.5)));
+    P.append(mkEl('label', { className: 'row' }, mkEl('input', { type: 'checkbox', checked: o.sheet.rotate, onchange: (e) => { o.sheet.rotate = e.target.checked; renderTray(); } }), ' Boleh diputar (abaikan arah serat)'));
+    let tot = 0;
+    for (const g of prodNesting(cl)) {
+      tot += g.cost;
+      P.append(mkEl('div', { className: 'small' }, mkEl('b', { textContent: `Tebal ${g.T} mm: ${g.nr.sheets.length} lembar` }), ` · terpakai ${g.nr.sheets.map((s2) => (s2.used * 100).toFixed(0) + '%').join(', ')} · harga/lembar `,
+        mkEl('input', { type: 'number', step: 5000, min: 0, value: g.price, style: 'width:80px', onchange: (e) => { o.prices[g.T] = Math.max(0, +e.target.value || 0); renderTray(); } })));
+      if (g.nr.tooBig.length) P.append(mkEl('div', { className: 'small', style: 'color:#c0392b', textContent: `${g.nr.tooBig.length} panel lebih besar dari lembar: ${g.nr.tooBig.map((x) => x.label).join(', ')}` }));
+      P.append(mkEl('div', { className: 'kurva', innerHTML: g.nr.sheets.slice(0, 3).map((s2) => sheetSvg(g.nr, s2, 240)).join('') }));
+    }
+    const hw = hardwareSum();
+    if (hw.engsel || hw.sekrup) P.append(mkEl('div', { className: 'small', textContent: `Perlengkapan: engsel ${hw.engsel}, handle ${hw.handle}, sekrup ±${hw.sekrup}, dowel ${hw.dowel}${tot ? ` · biaya papan Rp ${tot.toLocaleString('id-ID')}` : ''}` }));
+    P.append(mkEl('div', { className: 'btnrow' },
+      mkEl('button', { textContent: 'Laporan potong (PDF)', onclick: () => exportCutPdf() }),
+      mkEl('button', { textContent: 'Excel', onclick: exportCutXlsx }),
+      mkEl('button', { textContent: 'Pola CNC (DXF)', title: 'Satu berkas DXF per ketebalan papan', onclick: async () => { for (const g of prodNesting(cl)) if (!(await window.api.exportFile('dxf', PR.sheetsDxf(g.nr), `tata letak papan ${g.T} mm.dxf`))) return; toast('Tata letak lembar (DXF) disimpan'); } }),
+    ));
+  }
+  // ---------- Cetak 3D ----------
+  P.append(mkEl('div', { className: 'ttl', textContent: 'Cetak 3D' }));
+  const pr = o.print;
+  P.append(mkEl('div', { className: 'pdgrid' },
+    mkEl('label', {}, 'Skala', mkEl('select', { onchange: (e) => { pr.scale = +e.target.value; renderTray(); } }, ...[[1, '1:1'], [0.1, '1:10'], [0.05, '1:20'], [0.02, '1:50'], [0.01, '1:100'], [0.005, '1:200'], [10, '10:1'], [1000, 'model dlm mm']].map(([v, t]) => mkEl('option', { value: v, textContent: t, selected: pr.scale === v })))),
+    mkEl('label', {}, 'Bahan', mkEl('select', { onchange: (e) => { pr.material = e.target.value; renderTray(); } }, ...Object.keys(PR.FILAMENTS).map((k) => mkEl('option', { value: k, textContent: k, selected: pr.material === k })))),
+    num(pr, 'infill', 'Isian (%)', 5), num(pr, 'pricePerKg', 'Rp / kg', 10000)));
+  const sids = prodSids();
+  if (sids.length) {
+    const pa = PR.printAnalysis(model, sids, { ...pr, pricePerKg: pr.pricePerKg });
+    const hh = Math.floor(pa.hours), mm = Math.round((pa.hours - hh) * 60);
+    P.append(mkEl('div', { className: 'small' }, mkEl('b', { textContent: `${pa.size.map((x) => x.toFixed(1)).join(' × ')} mm` }), ` · volume ${pa.volume.toFixed(1)} cm³ · ±${pa.grams.toFixed(1)} g · ±${hh} j ${mm} m · Rp ${Math.round(pa.cost).toLocaleString('id-ID')}`));
+    if (pa.issues.length) P.append(mkEl('ul', { className: 'issues' }, ...[...new Set(pa.issues.map((i) => i.msg))].map((t) => mkEl('li', { textContent: t }))));
+    else P.append(mkEl('div', { className: 'small', style: 'color:#2f9e44', textContent: '✓ Siap dicetak: tertutup rapat, normal benar, muat di area cetak.' }));
+  }
+  P.append(mkEl('div', { className: 'btnrow' }, mkEl('button', { textContent: 'Ekspor STL (mm)', onclick: () => exportPrint('stl') }), mkEl('button', { textContent: 'Ekspor 3MF', onclick: () => exportPrint('3mf') })));
+  // ---------- Pola datar ----------
+  P.append(mkEl('div', { className: 'ttl', textContent: 'Pola datar — laser cut & kemasan' }));
+  o.box ||= { L: 100, W: 60, H: 40 };
+  P.append(mkEl('div', { className: 'pdgrid' }, num(o.box, 'L', 'Panjang (mm)'), num(o.box, 'W', 'Lebar (mm)'), num(o.box, 'H', 'Tinggi (mm)')));
+  P.append(mkEl('div', { className: 'btnrow' },
+    mkEl('button', { textContent: '+ Kotak kemasan', onclick: () => { const b = o.box; startPlace({ label: 'Kotak kemasan', gen: (m, at, n, angle) => { const start = m.nextId; PR.buildBox(m, b.L / 1000, b.W / 1000, b.H / 1000); const ids = new Set(m.faces.filter((f) => f.id >= start).map((f) => f.id)); G.applyMatrix(m, ids, new THREE.Matrix4().makeRotationZ(angle).setPosition(at)); if (m === model) for (const f of m.faces) if (ids.has(f.id)) f.group = editGroup; return { ids }; } }); } }),
+    mkEl('label', { title: 'Lebar lidah lem (mm)' }, 'Lidah ', mkEl('input', { type: 'number', min: 0, step: 1, value: o.net.tab, style: 'width:46px', onchange: (e) => { o.net.tab = Math.max(0, +e.target.value || 0); lastNet = null; } }), ' mm'),
+  ));
+  P.append(mkEl('div', { className: 'btnrow' }, mkEl('button', { textContent: 'Buka benda terpilih jadi pola', onclick: buildNet })));
+  if (lastNet) {
+    P.append(mkEl('div', { className: 'kurva', innerHTML: PR.netSvg(lastNet, 1).replace(/width="[^"]+mm" height="[^"]+mm"/, 'width="100%"') }));
+    P.append(mkEl('div', { className: 'muted small', textContent: `${lastNet.pieces} potongan · ${(lastNet.W * 1000).toFixed(0)} × ${(lastNet.H * 1000).toFixed(0)} mm · merah = potong, biru = lipat` }));
+    P.append(mkEl('div', { className: 'btnrow' }, mkEl('button', { textContent: 'PDF 1:1', onclick: () => exportNet('pdf') }), mkEl('button', { textContent: 'SVG (laser)', onclick: () => exportNet('svg') }), mkEl('button', { textContent: 'DXF', onclick: () => exportNet('dxf') })));
+  } else P.append(mkEl('div', { className: 'muted small', textContent: 'Pilih satu benda bersisi datar (kotak, prisma, kemasan), lalu buka jadi pola potong + lipat dengan lidah lem.' }));
+}
+
 // ---- RAB otomatis (format RAB_Bangunan) ----
 function rabProject() {
   model.rab ||= {};
@@ -6586,7 +6789,7 @@ window.__sk = {
   setSelection: (ids) => { selection = new Set(ids); refresh(); updateInfo(); },
   type: (t) => { vcbText = t; tool.onVCB && tool.onVCB(vcbText); vcbText = ''; renderVCB(); },
   key: (k) => window.dispatchEvent(new KeyboardEvent('keydown', { key: k })),
-  undo, redo, loadModel, setShadows, solidOp, runScript, sketch, textures, setMat, getCurMat: () => curMat, pluginCommands, applyArray, getLastArray: () => lastArray, C, buildHouse, HOUSES, buildAllStructure, toggleStructView, elevSheets, sectionSheets, exportRabPdf, kurvaSvg, rabExtraSheets, placeStairTool, placeMepTool, setStairShape: (v) => (stairShape = v), exportRab, renderKonsPane, addLevel, curLevel, planSheets, roomSliceZ, loadOnlineLib, placeOnline, insertModelAsComponent, exportSelectionComponent, getOnlineLib: () => onlineLib, exportWebViewer, shareToPhone, viewerHtml, runAi, openAi, aiContext, openVersions, newFromTemplate, openKeys, saveKeys, keyTools, recordVideo, sky, exportDrawing, bomData, exportBom, exportDXF, intersectSel, roofSel, showGrips, gripState: () => gripState, fastIds: () => fastIds, openDeform, applyDeform, tessellateSel, mirrorLinked, splinePoints, subdivideSel, roundAllSel, mirrorSel, importReference, filletSel, fitTexture, texMapper, editTexture, exportPNG, serializeProject, applyProjectData, startPlace, LIBRARY, insertLibrary, getFont, textShapes, buildText3D, confirmText3D, getPlaceGen: () => placeGen, boxSelect, openCtx, zoomSelection, fmt, parseNums, eyePos, walkBy, turnView, importMesh, exportGLB, addScene, goScene, showTray, hideSelection, unhideAll, cmd: handleMenu, enterEdit, exitEdit, editGroup: () => editGroup, sunState, styleOf, setStyle, refresh,
+  undo, redo, loadModel, setShadows, solidOp, runScript, sketch, textures, setMat, getCurMat: () => curMat, pluginCommands, applyArray, getLastArray: () => lastArray, C, PR, renderProdPane, placeCabinet, prodCutList, prodNesting, buildNet, exportNet, exportCutPdf, exportPrint, getLastNet: () => lastNet, buildHouse, HOUSES, buildAllStructure, toggleStructView, elevSheets, sectionSheets, exportRabPdf, kurvaSvg, rabExtraSheets, placeStairTool, placeMepTool, setStairShape: (v) => (stairShape = v), exportRab, renderKonsPane, addLevel, curLevel, planSheets, roomSliceZ, loadOnlineLib, placeOnline, insertModelAsComponent, exportSelectionComponent, getOnlineLib: () => onlineLib, exportWebViewer, shareToPhone, viewerHtml, runAi, openAi, aiContext, openVersions, newFromTemplate, openKeys, saveKeys, keyTools, recordVideo, sky, exportDrawing, bomData, exportBom, exportDXF, intersectSel, roofSel, showGrips, gripState: () => gripState, fastIds: () => fastIds, openDeform, applyDeform, tessellateSel, mirrorLinked, splinePoints, subdivideSel, roundAllSel, mirrorSel, importReference, filletSel, fitTexture, texMapper, editTexture, exportPNG, serializeProject, applyProjectData, startPlace, LIBRARY, insertLibrary, getFont, textShapes, buildText3D, confirmText3D, getPlaceGen: () => placeGen, boxSelect, openCtx, zoomSelection, fmt, parseNums, eyePos, walkBy, turnView, importMesh, exportGLB, addScene, goScene, showTray, hideSelection, unhideAll, cmd: handleMenu, enterEdit, exitEdit, editGroup: () => editGroup, sunState, styleOf, setStyle, refresh,
   mouse(type, x, y, z, extra = {}) {
     const p = this.project(x, y, z);
     if (!p) return;

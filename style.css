@@ -174,3 +174,5 @@ table.rab input { width: 72px; font-size: 11px; }
 table.rab.rekap input { width: 44px; }
 #tray .terbilang { font-style: italic; color: #334; margin: 2px 0 6px; }
 #tray .kurva { border: 1px solid #e3e7ec; border-radius: 4px; padding: 2px; background: #fff; }
+#tray .issues { margin: 4px 0; padding-left: 18px; color: #c0392b; font-size: 11px; }
+#tray .kurva svg + svg { margin-top: 4px; }

@@ -23,6 +23,8 @@ Installer belum ditandatangani digital, jadi Windows SmartScreen bisa menampilka
 
 **Rumah siap pakai & dokumen proyek** — Template Rumah Tipe 36, 45, 54, dan 2 Lantai (lengkap dengan kusen, ruang, utilitas, atap, struktur, dan RAB). Struktur otomatis: kolom praktis (digeser dari kusen), ring balok, sloof, pondasi batu kali, dengan **daftar pembesian** per diameter (batang 12 m). Gambar kerja PDF: denah per lantai (kolom, kode kusen + tabel kusen, dimensi tiap dinding, garis potong A-A / B-B), **tampak 4 sisi** dan **potongan A-A / B-B** dengan level ±0,00.
 
+**Produksi (panel kanan → Produksi)** — *Mebel*: kabinet/lemari parametrik, daftar potong otomatis dari papan di model, optimasi tata letak di lembar 2440×1220 (celah gergaji, arah serat), jumlah lembar & biaya, perlengkapan (engsel, handle, sekrup), laporan PDF, Excel, dan DXF untuk CNC. *Cetak 3D*: cek siap cetak (celah, normal terbalik, terlalu tipis, melebihi area cetak), berat filamen, lama & biaya cetak, ekspor STL/3MF dalam mm dengan skala. *Pola datar*: buka benda jadi jaring-jaring dengan garis potong, garis lipat, dan lidah lem — ekspor PDF ukuran asli, SVG untuk laser, atau DXF; plus pembuat kotak kemasan.
+
 **Pengorganisasian** — Grup & Komponen bertaut (bisa bersarang), Salinan cermin bertaut, Tag, Outliner, Adegan + animasi, Sembunyikan/tampilkan, Bidang potong.
 
 **Tampilan & render** — Gaya (Standar, Sketsa, Arsitek, Monokrom, Kawat, X-Ray, Kartun, Render), bayangan matahari dengan slider jam, bayangan lembut (AO), langit realistis, lampu & mode malam, material bertekstur / mengkilap / logam / kaca, posisi tekstur.
@@ -57,7 +59,7 @@ npm start            # jalankan dari kode sumber
 npm run dist         # buat installer di dist/
 npm run release          # buat installer & unggah ke draf GitHub Release (butuh GH_TOKEN)
 npm run release:publish  # terbitkan draf -> aplikasi terpasang akan memperbarui diri
-node test/csg.test.js   # tes geometri (juga: groups, shapes, deform, arch, boolean2, boolean3, construct)
+node test/csg.test.js   # tes geometri (juga: groups, shapes, deform, arch, boolean2, boolean3, construct, production)
 ```
 
 ## Contoh hasil
