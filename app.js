@@ -2111,6 +2111,28 @@ function levelTag(gid) {
   if (gid != null && lv.tag != null && model.groups[gid] && model.groups[gid].tag == null) model.groups[gid].tag = lv.tag;
   return gid;
 }
+function nextLevelHeight() {
+  const L = C.levelsOf(model), i = Math.min(model.activeLevel || 0, L.length - 1);
+  return L[i + 1] ? L[i + 1].z - L[i].z : L[i].h;
+}
+function placeStairTool(opt = {}) {
+  const sp = C.stairSpec(nextLevelHeight(), opt);
+  toast(`Tangga ${sp.n} anak tangga (optrede ${fmt(sp.R)}, antrede ${fmt(sp.T)}), panjang ${fmt(sp.n * sp.T)}. Klik kaki tangga; panah kiri/kanan memutar.`);
+  startPlace({
+    label: 'Tangga',
+    gen: (m, at, n, angle) => {
+      const base = at.clone();
+      if (m === model) base.z = curLevel().z; // kaki tangga selalu di lantai aktif
+      const r = C.placeStair(m, base, angle, sp, m === model ? editGroup : null);
+      if (m === model) {
+        levelTag(r.gid);
+        const rid = C.cutStairVoid(model, r.gid);
+        setTimeout(() => toast(rid != null ? `Lantai ruang "${model.groups[rid].room.name}" di atasnya otomatis dilubangi` : 'Tangga ditempatkan (tidak ada ruang lantai atas yang menutupinya)'), 50);
+      }
+      return r;
+    },
+  });
+}
 function addLevel() {
   const L = C.levelsOf(model);
   if (L.length === 1 && L[0].tag == null) {
@@ -4613,6 +4635,14 @@ const sketch = {
     return i;
   },
   rab() { return C.rabRows(model); },
+  stairs(x, y, angleDeg = 0, w = 0.9) {
+    const z = curLevel().z;
+    const r = C.placeStair(model, new THREE.Vector3(x, y, z), (angleDeg * Math.PI) / 180, C.stairSpec(nextLevelHeight(), { w }), editGroup);
+    levelTag(r.gid);
+    C.cutStairVoid(model, r.gid);
+    return r.gid;
+  },
+  pondasi(p) { model.rab ||= {}; model.rab.pondasi = { ...(model.rab.pondasi || {}), ...p }; return C.pondasiOf(model); },
   roof(solidIds, pitchDeg = 30, overhang = 0.4) {
     const ids = new Set(solidIds.flatMap((sid) => this.solidFaces(sid)));
     const sid = G.gableRoof(model, G.bboxOf(model, ids), pitchDeg, overhang, '#ffffff', editGroup);
@@ -5447,6 +5477,7 @@ async function exportDrawing() {
     .plan { position: absolute; left: 12mm; top: 12mm; width: 396mm; height: 250mm; }
     .plan img, .plan svg { position: absolute; inset: 0; width: 100%; height: 100%; }
     .plan .cut { stroke: #111; stroke-width: 5; stroke-linecap: square; }
+    .plan .leaf { stroke: #111; stroke-width: 3; } .plan .swing { stroke: #555; stroke-width: 1.5; fill: none; stroke-dasharray: 8 5; }
     .plan .rn { font-size: 22px; font-weight: 700; fill: #1d2b3a; } .plan .ra { font-size: 19px; fill: #44515f; }
     .plan .dim line { stroke: #c0392b; stroke-width: 2; } .plan .dim text { fill: #c0392b; font-size: 22px; font-weight: 600; }
   </style></head><body><div class="sheet"><div class="frame"></div><div class="grid">${cells.join('')}</div>
@@ -5485,7 +5516,21 @@ function planSheets(vis) {
       const v = new THREE.Vector3(x, y, z).project(cam);
       return [((v.x + 1) / 2) * W, ((1 - v.y) / 2) * H];
     };
-    const segs = C.sliceSegments(model, cutZ, (f) => vis(f) && ids.has(f.id));
+    const segs = C.sliceSegments(model, cutZ, (f) => vis(f) && ids.has(f.id) && f.part !== 'leaf');
+    let swings = '';
+    for (const [gid, g] of Object.entries(model.groups)) {
+      const op = g.opening;
+      if (!op || op.type !== 'pintu' || !op.frame || !ids.has([...G.entitiesInTree(model, +gid)][0])) continue;
+      const Mg = new THREE.Matrix4().fromArray(g.m);
+      const o = V3(op.frame.o).applyMatrix4(Mg), u = V3(op.frame.u).transformDirection(Mg), d = V3(op.frame.d).transformDirection(Mg);
+      const lw = op.w - 0.12;
+      const hinge = o.clone().addScaledVector(u, 0.06).addScaledVector(d, op.t);
+      const shut = hinge.clone().addScaledVector(u, lw), open = hinge.clone().addScaledVector(d, lw);
+      const [hx, hy] = sp(hinge.x, hinge.y, cutZ), [sx, sy] = sp(shut.x, shut.y, cutZ), [ox, oy] = sp(open.x, open.y, cutZ);
+      const rr = Math.hypot(sx - hx, sy - hy);
+      const sweep = (sx - hx) * (oy - hy) - (sy - hy) * (ox - hx) > 0 ? 1 : 0;
+      swings += `<line class="leaf" x1="${hx.toFixed(1)}" y1="${hy.toFixed(1)}" x2="${ox.toFixed(1)}" y2="${oy.toFixed(1)}"/><path class="swing" d="M${sx.toFixed(1)} ${sy.toFixed(1)} A${rr.toFixed(1)} ${rr.toFixed(1)} 0 0 ${sweep} ${ox.toFixed(1)} ${oy.toFixed(1)}"/>`;
+    }
     const lines = segs.map(([a, b]) => { const p = sp(a[0], a[1], cutZ), q = sp(b[0], b[1], cutZ); return `<line class="cut" x1="${p[0].toFixed(1)}" y1="${p[1].toFixed(1)}" x2="${q[0].toFixed(1)}" y2="${q[1].toFixed(1)}"/>`; }).join('');
     let area = 0;
     const rooms = Object.entries(model.groups).filter(([gid, g]) => g.room && Math.abs(g.room.z - lv.z) < 0.1 && vis({ group: +gid })).map(([, g]) => {
@@ -5505,7 +5550,7 @@ function planSheets(vis) {
       <text x="${x - 12}" y="${(t + b) / 2}" text-anchor="middle" transform="rotate(-90 ${x - 12} ${(t + b) / 2})">${escHtml(fmt(size.y))}</text></g>`;
     out.push({
       title: 'DENAH ' + lv.name.toUpperCase(), N, area: area ? area.toFixed(2) + ' m²' : '-',
-      body: `<img src="${data}"><svg viewBox="0 0 ${W} ${H}">${lines}${rooms}${dims}</svg>`,
+      body: `<img src="${data}"><svg viewBox="0 0 ${W} ${H}">${lines}${swings}${rooms}${dims}</svg>`,
     });
   });
   return out;
@@ -5547,6 +5592,7 @@ function renderKonsPane() {
   });
   P.append(mkEl('div', { className: 'btnrow' },
     mkEl('button', { textContent: '+ Tambah lantai', onclick: addLevel }),
+    mkEl('button', { textContent: '+ Tangga', title: 'Tangga beton dari lantai aktif ke lantai di atasnya', onclick: () => placeStairTool() }),
     mkEl('button', { textContent: 'Hanya lantai aktif', disabled: L.length < 2, onclick: () => { L.forEach((lv, i) => { const t = model.tags.find((x) => x.id === lv.tag); if (t) t.visible = i === (model.activeLevel || 0); }); snapCache = null; changed(); } }),
     mkEl('button', { textContent: 'Semua', disabled: L.length < 2, onclick: () => { L.forEach((lv) => { const t = model.tags.find((x) => x.id === lv.tag); if (t) t.visible = true; }); snapCache = null; changed(); } }),
   ));
@@ -5577,6 +5623,16 @@ function renderKonsPane() {
   model.rab.prices ||= {};
   P.append(trow('Nama proyek', mkEl('input', { value: pj.name, onchange: (e) => { model.rab.project.name = e.target.value; changed(); } })));
   P.append(trow('Lokasi', mkEl('input', { value: pj.location === '-' ? '' : pj.location, placeholder: 'mis. Bandung', onchange: (e) => { model.rab.project.location = e.target.value; changed(); } })));
+  const pd = C.pondasiOf(model);
+  const pin = (k, label, tip) => mkEl('label', { title: tip }, label, mkEl('input', { type: 'number', step: 0.05, min: 0, value: pd[k], onchange: (e) => {
+    model.rab.pondasi = { ...(model.rab.pondasi || {}), [k]: Math.max(0, +e.target.value || 0) };
+    changed();
+  } }));
+  P.append(mkEl('div', { className: 'msec', textContent: 'Pondasi batu kali (m)' }));
+  P.append(mkEl('div', { className: 'pdgrid' },
+    pin('top', 'Lebar atas', 'Lebar atas pondasi'), pin('bot', 'Lebar bawah', 'Lebar bawah pondasi'), pin('h', 'Tinggi', 'Tinggi pondasi'),
+    pin('w', 'Lebar galian', 'Lebar galian tanah'), pin('d', 'Dalam galian', 'Kedalaman galian'), pin('sand', 'Pasir', 'Tebal urugan pasir di bawah pondasi')));
+  P.append(mkEl('div', { className: 'muted small', textContent: `Penampang batu kali ${pd.stone.toFixed(3)} m² · galian ${(pd.w * pd.d).toFixed(2)} m² per meter dinding` }));
   const rows = C.rabRows(model);
   if (!rows.length) {
     P.append(mkEl('div', { className: 'muted small', textContent: 'RAB dihitung otomatis dari dinding, kusen pintu/jendela, ruang, dan atap pelana yang Anda gambar.' }));
@@ -6093,7 +6149,7 @@ window.__sk = {
   setSelection: (ids) => { selection = new Set(ids); refresh(); updateInfo(); },
   type: (t) => { vcbText = t; tool.onVCB && tool.onVCB(vcbText); vcbText = ''; renderVCB(); },
   key: (k) => window.dispatchEvent(new KeyboardEvent('keydown', { key: k })),
-  undo, redo, loadModel, setShadows, solidOp, runScript, sketch, textures, setMat, getCurMat: () => curMat, pluginCommands, applyArray, getLastArray: () => lastArray, C, exportRab, renderKonsPane, addLevel, curLevel, planSheets, roomSliceZ, loadOnlineLib, placeOnline, insertModelAsComponent, exportSelectionComponent, getOnlineLib: () => onlineLib, exportWebViewer, shareToPhone, viewerHtml, runAi, openAi, aiContext, openVersions, newFromTemplate, openKeys, saveKeys, keyTools, recordVideo, sky, exportDrawing, bomData, exportBom, exportDXF, intersectSel, roofSel, showGrips, gripState: () => gripState, fastIds: () => fastIds, openDeform, applyDeform, tessellateSel, mirrorLinked, splinePoints, subdivideSel, roundAllSel, mirrorSel, importReference, filletSel, fitTexture, texMapper, editTexture, exportPNG, serializeProject, applyProjectData, startPlace, LIBRARY, insertLibrary, getFont, textShapes, buildText3D, confirmText3D, getPlaceGen: () => placeGen, boxSelect, openCtx, zoomSelection, fmt, parseNums, eyePos, walkBy, turnView, importMesh, exportGLB, addScene, goScene, showTray, hideSelection, unhideAll, cmd: handleMenu, enterEdit, exitEdit, editGroup: () => editGroup, sunState, styleOf, setStyle, refresh,
+  undo, redo, loadModel, setShadows, solidOp, runScript, sketch, textures, setMat, getCurMat: () => curMat, pluginCommands, applyArray, getLastArray: () => lastArray, C, placeStairTool, exportRab, renderKonsPane, addLevel, curLevel, planSheets, roomSliceZ, loadOnlineLib, placeOnline, insertModelAsComponent, exportSelectionComponent, getOnlineLib: () => onlineLib, exportWebViewer, shareToPhone, viewerHtml, runAi, openAi, aiContext, openVersions, newFromTemplate, openKeys, saveKeys, keyTools, recordVideo, sky, exportDrawing, bomData, exportBom, exportDXF, intersectSel, roofSel, showGrips, gripState: () => gripState, fastIds: () => fastIds, openDeform, applyDeform, tessellateSel, mirrorLinked, splinePoints, subdivideSel, roundAllSel, mirrorSel, importReference, filletSel, fitTexture, texMapper, editTexture, exportPNG, serializeProject, applyProjectData, startPlace, LIBRARY, insertLibrary, getFont, textShapes, buildText3D, confirmText3D, getPlaceGen: () => placeGen, boxSelect, openCtx, zoomSelection, fmt, parseNums, eyePos, walkBy, turnView, importMesh, exportGLB, addScene, goScene, showTray, hideSelection, unhideAll, cmd: handleMenu, enterEdit, exitEdit, editGroup: () => editGroup, sunState, styleOf, setStyle, refresh,
   mouse(type, x, y, z, extra = {}) {
     const p = this.project(x, y, z);
     if (!p) return;

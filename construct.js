@@ -94,9 +94,13 @@ export function buildKusen(m, type, w, h, t, M) {
   const glass = [];
   if (type === 'pintu') {
     const lt = 0.035, ly = t / 2 - lt / 2;
-    lbox(m, 0, fw, ly, 0.01, w - 2 * fw, lt, h - fw - 0.01, LEAF);
-    lbox(m, 0, w - fw - 0.12, ly - 0.03, 1.0, 0.05, 0.03, 0.04, HANDLE);
-    lbox(m, 0, w - fw - 0.12, ly + lt, 1.0, 0.05, 0.03, 0.04, HANDLE);
+    const leaf = [
+      lbox(m, 0, fw, ly, 0.01, w - 2 * fw, lt, h - fw - 0.01, LEAF),
+      lbox(m, 0, w - fw - 0.12, ly - 0.03, 1.0, 0.05, 0.03, 0.04, HANDLE),
+      lbox(m, 0, w - fw - 0.12, ly + lt, 1.0, 0.05, 0.03, 0.04, HANDLE),
+    ];
+    // daun pintu tidak ikut digambar sebagai potongan di denah (diganti busur bukaan)
+    for (const f of m.faces) if (leaf.includes(f.solid)) f.part = 'leaf';
   } else {
     lbox(m, 0, fw, y0, 0, w - 2 * fw, fd, fw, WOOD);
     const leaves = w > 0.8 ? 2 : 1;
@@ -136,7 +140,12 @@ export function placeOpening(model, faceId, point, type, opt = {}) {
   const ids = buildKusen(model, type, w, h, t, M);
   for (const f of model.faces) if (ids.has(f.id)) f.group = parent;
   const gid = G.makeGroup(model, ids, (type === 'pintu' ? 'Pintu ' : 'Jendela ') + `${w.toFixed(2)}×${h.toFixed(2)}`, false, parent);
-  model.groups[gid].opening = { type, w: +w.toFixed(3), h: +h.toFixed(3), sill: +fr.sill.toFixed(3), t: +t.toFixed(3) };
+  const r6 = (v) => [v.x, v.y, v.z].map((x) => +x.toFixed(6));
+  model.groups[gid].opening = {
+    type, w: +w.toFixed(3), h: +h.toFixed(3), sill: +fr.sill.toFixed(3), t: +t.toFixed(3),
+    // kerangka saat dipasang (dunia); posisi terkini = matriks grup × kerangka ini
+    frame: { o: r6(fr.o), u: r6(fr.u), d: r6(fr.n.clone().negate()) },
+  };
   return { gid, wall: newWall };
 }
 
@@ -319,6 +328,80 @@ export function levelAt(model, z) {
   return idx;
 }
 
+// ---------- pondasi (ukuran bisa diubah di panel) ----------
+export const PONDASI_DEFAULT = { top: 0.3, bot: 0.6, h: 0.7, w: 0.8, d: 0.8, sand: 0.05 };
+export function pondasiOf(model, extra) {
+  const p = { ...PONDASI_DEFAULT, ...((model.rab && model.rab.pondasi) || {}), ...(extra || {}) };
+  p.stone = p.stone ?? ((p.top + p.bot) / 2) * p.h;
+  return p;
+}
+
+// ---------- tangga beton lurus ----------
+export function stairSpec(H, opt = {}) {
+  const n = Math.max(2, Math.round(H / (opt.riser || 0.175)));
+  return { H, n, R: H / n, T: opt.tread || 0.28, w: opt.w || 0.9, waist: opt.waist || 0.12 };
+}
+// Bangun tangga di koordinat lokal (naik ke +Y, lebar sepanjang X, kaki di y=0), lalu M.
+export function buildStair(m, sp, M) {
+  const start = m.nextId;
+  const { n, R, T, w, waist, H } = sp;
+  const run = n * T, tanA = R / T, k = waist / Math.cos(Math.atan(tanA));
+  const prof = [[0, 0], [0, R]];
+  for (let i = 1; i < n; i++) prof.push([i * T, i * R], [i * T, (i + 1) * R]);
+  prof.push([run, H], [run, Math.max(0, H - k)], [Math.min(run - 0.01, k / tanA), 0]);
+  const x0 = -w / 2;
+  const f = G.makeFace(m, prof.map(([y, z]) => [x0, y, z]), new THREE.Vector3(1, 0, 0), '#cfc9bd');
+  m.faces.push(f);
+  G.pushPull(m, f.id, w);
+  const conc = f.solid;
+  // reling sisi kanan: tiang di kaki & puncak + pegangan miring
+  const xr = w / 2 - 0.05;
+  lbox(m, 0, xr, 0.1, R, 0.04, 0.04, 0.9, '#4a4f57');
+  lbox(m, 0, xr, run - 0.14, H, 0.04, 0.04, 0.9, '#4a4f57');
+  const rail = G.makeFace(m, [[xr, 0.1, R + 0.88], [xr, run - 0.1, H + 0.88], [xr, run - 0.1, H + 0.93], [xr, 0.1, R + 0.93]], new THREE.Vector3(1, 0, 0), '#4a4f57');
+  m.faces.push(rail);
+  G.pushPull(m, rail.id, 0.04);
+  const ids = new Set(m.faces.filter((q) => q.id >= start).map((q) => q.id));
+  for (const q of m.faces) if (ids.has(q.id) && q.solid !== conc) q.finish = 'metal';
+  if (M) G.applyMatrix(m, ids, M);
+  return { ids, conc, run };
+}
+export function placeStair(m, at, angle, sp, parent = null) {
+  const M = new THREE.Matrix4().makeRotationZ(angle).setPosition(at);
+  const r = buildStair(m, sp, M);
+  for (const f of m.faces) if (r.ids.has(f.id)) f.group = parent;
+  const gid = G.makeGroup(m, r.ids, `Tangga ${sp.n} anak tangga`, false, parent);
+  const fp = [[-sp.w / 2, 0], [sp.w / 2, 0], [sp.w / 2, r.run], [-sp.w / 2, r.run]].map(([x, y]) => new THREE.Vector3(x, y, 0).applyMatrix4(M));
+  m.groups[gid].stair = { n: sp.n, R: +sp.R.toFixed(4), T: sp.T, w: sp.w, H: sp.H, run: +r.run.toFixed(4), fp: fp.map((v) => [+v.x.toFixed(4), +v.y.toFixed(4)]), z: at.z };
+  return { gid, ids: r.ids };
+}
+// Lubangi lantai ruang di atas tangga (bukaan tangga) dan kurangi luasnya.
+export function cutStairVoid(model, gid) {
+  const st = model.groups[gid]?.stair;
+  if (!st) return null;
+  const ztop = st.z + st.H;
+  const hole = st.fp.map(([x, y]) => [x, y]);
+  for (const [rid, g] of Object.entries(model.groups)) {
+    if (!g.room || Math.abs(g.room.z - ztop) > 0.05) continue;
+    const f = model.faces.find((q) => (q.group ?? null) === +rid && q.n[2] > 0.99);
+    if (!f) continue;
+    const poly = f.pts.map((p) => new THREE.Vector2(p[0], p[1]));
+    if (!hole.every(([x, y]) => G.pointInPoly2(new THREE.Vector2(x, y), poly))) continue;
+    const z = f.pts[0][2];
+    const loop = hole.map(([x, y]) => [x, y, z]);
+    if (G.newellNormal(loop).z > 0) loop.reverse();
+    f.holes.push(loop);
+    const a = st.w * st.run;
+    g.room.area = +(g.room.area - a).toFixed(3);
+    const lab = model.labels.find((l) => l.id === g.room.label);
+    if (lab) lab.text = `${g.room.name}
+${g.room.area.toFixed(2)} m²`;
+    st.void = +rid;
+    return +rid;
+  }
+  return null;
+}
+
 // ---------- RAB ----------
 const ahspBy = Object.fromEntries(AHSP.map((a) => [a.code, a]));
 export const FLOOR_TYPES = { '7.4.1.1': 'Keramik 30x30', '7.4.1.2': 'Keramik 40x40', '9.1.1.1': 'Granit 60x60' };
@@ -333,7 +416,7 @@ export function rabQuantities(model, opt = {}) {
   };
   const levels = levelsOf(model);
   const z0 = levels[0].z;
-  const pond = { w: 0.8, d: 0.8, sand: 0.05, stone: 0.315, ...(opt.pondasi || {}) };
+  const pond = pondasiOf(model, opt.pondasi);
   for (const [gid, g] of Object.entries(model.groups)) {
     if (g.wall) {
       const sids = new Set(model.faces.filter((f) => (f.group ?? null) === +gid && f.solid != null).map((f) => f.solid));
@@ -375,6 +458,15 @@ export function rabQuantities(model, opt = {}) {
         add('6.2.1.1', r.area * 0.1);
       } else add('18.1.1.1', r.area);
     }
+    if (g.stair) {
+      const st = g.stair;
+      const sids = new Set(model.faces.filter((f) => (f.group ?? null) === +gid && !f.finish).map((f) => f.solid));
+      let vol = 0;
+      for (const s2 of sids) if (s2 != null) vol += solidVolume(model, s2);
+      add('6.3.1.3', vol);
+      add('7.4.1.1', st.n * (st.T + st.R) * st.w);
+      add('14.3.1.1', Math.hypot(st.run, st.H));
+    }
     if (g.roof) {
       let a = 0;
       for (const f of model.faces) if ((f.group ?? null) === +gid && f.n[2] > 0.1) a += G.faceArea(f);
@@ -385,7 +477,7 @@ export function rabQuantities(model, opt = {}) {
   return q;
 }
 
-const ORDER = ['Pekerjaan Tanah', 'Pekerjaan Pondasi', 'Pekerjaan Beton', 'Cor Dak', 'Pekerjaan Dinding', 'Pekerjaan Plester', 'Pekerjaan Kayu', 'Pekerjaan Lantai', 'Pekerjaan Plafon', 'Baja Ringan', 'Pekerjaan Atap', 'Pekerjaan Cat'];
+const ORDER = ['Pekerjaan Tanah', 'Pekerjaan Pondasi', 'Pekerjaan Beton', 'Cor Dak', 'Konstruksi Baja', 'Pekerjaan Dinding', 'Pekerjaan Plester', 'Pekerjaan Kayu', 'Pekerjaan Lantai', 'Pekerjaan Plafon', 'Baja Ringan', 'Pekerjaan Atap', 'Pekerjaan Cat'];
 
 export function rabRows(model, opt = {}) {
   const q = rabQuantities(model, opt);

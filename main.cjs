@@ -391,6 +391,8 @@ API \`sketch\` (semua fungsi pembuat benda mengembalikan id solid, kecuali diseb
 - wallFaceAt(x, y, z=1) — cari bidang dinding terdekat; mengembalikan {id, point} untuk door/window
 - door(faceId, point, w=0.9, h=2.1) / window(faceId, point, w=1.2, h=1.2, sill=0.9) — kusen pintu/jendela yang otomatis melubangi dinding (contoh: const f = sketch.wallFaceAt(2, -0.075, 1); sketch.door(f.id, f.point))
 - room(x, y, name) — ruang di titik dalam dinding tertutup (lantai + label nama & luas m², masuk RAB)
+- stairs(x, y, angleDeg=0, w=0.9) — tangga beton + reling dari lantai aktif ke lantai di atasnya (naik ke arah +Y diputar angleDeg); lantai ruang atas otomatis dilubangi
+- pondasi({top, bot, h, w, d}) — ukuran pondasi batu kali & galian untuk RAB
 - level(name, z, h=3.5) — buat/aktifkan lantai bertingkat; dinding & ruang berikutnya dibuat di elevasi lantai tersebut (titik dinding pakai z lantai)
 - library(name, x, y, z=0, angleDeg=0) — sisipkan komponen pustaka: meja, kursi, sofa, ranjang, lemari, pintu, jendela, pohon, manusia, mobil, tangga (mengembalikan id grup)
 - solidFaces(solidId) — daftar id bidang milik solid

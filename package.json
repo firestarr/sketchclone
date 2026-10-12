@@ -1,6 +1,6 @@
 {
   "name": "sketchclone",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Aplikasi desktop pemodelan 3D ala SketchUp",
   "main": "main.cjs",
   "scripts": {

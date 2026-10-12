@@ -58,3 +58,29 @@ f3.holes = fp3.holes; m2.faces.push(f3); G.pushPull(m2, f3.id, 3);
 const o3 = C.roomOutline(m2, 1, 1, 2.5);
 const exp = 5.8 * 2.8 + 2.8 * 2; // (0.1..5.9)x(0.1..2.9) + (0.1..2.9)x(2.9..4.9)
 ok(o3 && Math.abs(o3.area - exp) < 0.03 && o3.pts.length === 6, 'denah L ' + (o3 && o3.area.toFixed(3)) + ' (harus ' + exp.toFixed(2) + ')');
+// tangga + lubang lantai atas
+{
+  const m3 = G.normalizeModel({ faces: [], lines: [], nextId: 1 });
+  const P3 = [[0, 0, 0], [6, 0, 0], [6, 5, 0], [0, 5, 0]];
+  for (const z of [0, 3]) {
+    const fp = G.wallFootprint(P3.map((p) => [p[0], p[1], z]), 0.15, true);
+    const f = G.makeFace(m3, fp.pts, new THREE.Vector3(0, 0, 1), '#eee');
+    f.holes = fp.holes; m3.faces.push(f); G.pushPull(m3, f.id, 3);
+  }
+  const top = C.roomOutline(m3, 3, 2.5, 5.9);
+  const rg = C.makeRoom(m3, top, 'Atas', 3);
+  const a0 = m3.groups[rg].room.area;
+  const sp = C.stairSpec(3);
+  ok(sp.n === 17 && Math.abs(sp.R * sp.n - 3) < 1e-9, 'tangga 17 anak tangga');
+  const st = C.placeStair(m3, new THREE.Vector3(0.5, 1.5, 0), -Math.PI / 2, sp);
+  const vol = C.solidVolume(m3, m3.faces.find((f) => f.group === st.gid && !f.finish).solid);
+  ok(vol > 0.5 && vol < 2, 'volume beton tangga ' + vol.toFixed(3));
+  ok(C.cutStairVoid(m3, st.gid) === rg, 'lantai atas dilubangi');
+  ok(Math.abs(a0 - m3.groups[rg].room.area - 0.9 * 17 * 0.28) < 1e-3, 'luas lantai atas berkurang');
+  const fl = m3.faces.find((f) => f.group === rg);
+  ok(Math.abs(G.faceArea(fl) - m3.groups[rg].room.area) < 0.02, 'luas bidang = luas ruang');
+  const rr = Object.fromEntries(C.rabRows(m3).map((x) => [x.key, x]));
+  ok(rr['6.3.1.3'] && rr['14.3.1.1'] && rr['7.4.1.1'], 'RAB tangga (beton, reling, keramik)');
+  m3.rab = { pondasi: { top: 0.4, bot: 0.8, h: 1 } };
+  ok(Math.abs(C.pondasiOf(m3).stone - 0.6) < 1e-9, 'ukuran pondasi dari model');
+}
