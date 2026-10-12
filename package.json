@@ -7,7 +7,8 @@
     "build:js": "esbuild app.js --bundle --format=esm --outfile=bundle/app.js --sourcemap --log-level=warning",
     "start": "npm run build:js && electron .",
     "dist": "npm run build:js && electron-builder --win",
-    "release": "npm run build:js && electron-builder --win --publish always"
+    "release": "npm run build:js && electron-builder --win --publish always",
+    "release:publish": "node -e \"const v=require('./package.json').version;require('child_process').execSync('gh release edit v'+v+' --draft=false',{stdio:'inherit'})\""
   },
   "author": "SketchClone",
   "license": "ISC",
@@ -54,7 +55,7 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "artifactName": "-Setup-."
+      "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "icon": "build/icon.png",
     "publish": [
@@ -62,12 +63,12 @@
         "provider": "github",
         "owner": "firestarr",
         "repo": "sketchclone",
-        "releaseType": "release"
+        "releaseType": "draft"
       }
     ],
-    "artifactName": "-.",
+    "artifactName": "${productName}-${version}.${ext}",
     "portable": {
-      "artifactName": "-."
+      "artifactName": "${productName}-${version}.${ext}"
     }
   },
   "dependencies": {

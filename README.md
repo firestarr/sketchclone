@@ -51,7 +51,8 @@ API `sketch` juga dipakai Asisten AI: `box`, `roundBox`, `cylinder`, `sphere`, `
 npm install
 npm start            # jalankan dari kode sumber
 npm run dist         # buat installer di dist/
-npm run release      # buat installer & terbitkan ke GitHub Releases (butuh GH_TOKEN)
+npm run release          # buat installer & unggah ke draf GitHub Release (butuh GH_TOKEN)
+npm run release:publish  # terbitkan draf -> aplikasi terpasang akan memperbarui diri
 node test/csg.test.js   # tes geometri (juga: groups, shapes, deform, arch, boolean2, boolean3)
 ```
 
