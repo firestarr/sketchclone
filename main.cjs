@@ -52,8 +52,9 @@ function buildMenu() {
         { label: 'Riwayat Versi...', click: () => send('versions') },
         { label: 'Simpan Sebagai...', accelerator: 'CmdOrCtrl+Shift+S', click: () => send('saveAs') },
         { type: 'separator' },
-        { label: 'Impor OBJ/STL...', accelerator: 'CmdOrCtrl+I', click: () => send('import') },
+        { label: 'Impor SketchUp/OBJ/STL...', accelerator: 'CmdOrCtrl+I', click: () => send('import') },
         { label: 'Impor Gambar Referensi...', click: () => send('refImage') },
+        { label: 'Ekspor ke SketchUp (.dae)...', click: () => send('exportDae') },
         { label: 'Ekspor OBJ...', click: () => send('exportObj') },
         { label: 'Ekspor glTF (.glb)...', click: () => send('exportGlb') },
         { label: 'Ekspor Gambar PNG...', accelerator: 'CmdOrCtrl+Alt+P', click: () => send('exportPng') },
@@ -518,7 +519,7 @@ ipcMain.handle('fonts:read', (_e, file) => {
 
 ipcMain.handle('file:import', async () => {
   const r = await dialog.showOpenDialog(win, {
-    filters: [{ name: 'Model 3D', extensions: ['obj', 'stl'] }],
+    filters: [{ name: 'Model 3D (SketchUp, OBJ, STL)', extensions: ['skp', 'obj', 'stl'] }],
     properties: ['openFile'],
   });
   if (r.canceled) return null;

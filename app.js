@@ -10,6 +10,7 @@ import { LIBRARY, insertLibrary } from './library.js';
 import * as C from './construct.js';
 import * as PR from './production.js';
 import * as S from './struktur.js';
+import { parseSkp } from './skp.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
@@ -5496,10 +5497,58 @@ function renderStylesPane() {
   P.append(mkEl('div', { className: 'muted small', textContent: 'Gaya ikut tersimpan di adegan.' }));
 }
 
+// ---- Impor SketchUp (.skp 2021+) ----
+const loopArea = (l) => {
+  let x = 0, y = 0, z = 0;
+  for (let i = 0; i < l.length; i++) {
+    const a = l[i], b = l[(i + 1) % l.length];
+    x += (a[1] - b[1]) * (a[2] + b[2]);
+    y += (a[2] - b[2]) * (a[0] + b[0]);
+    z += (a[0] - b[0]) * (a[1] + b[1]);
+  }
+  return Math.hypot(x, y, z) / 2;
+};
+async function importSkp(r) {
+  let res;
+  try {
+    res = await parseSkp(r.data);
+  } catch (e) {
+    return toast('Gagal membaca SketchUp: ' + e.message);
+  }
+  const all = new Set(), made = [];
+  for (const g of res.groups) {
+    const ids = new Set();
+    for (const sf of g.faces) {
+      const loops = sf.loops.slice().sort((a, b) => loopArea(b) - loopArea(a));
+      const f = G.makeFace(model, loops[0], sf.n ? V3(sf.n) : null, sf.color || '#e8e4dc');
+      if (!f) continue;
+      f.holes = loops.slice(1);
+      f.group = editGroup;
+      model.faces.push(f);
+      ids.add(f.id);
+    }
+    if (!ids.size) continue;
+    const gid = G.makeGroup(model, ids, g.name, false, editGroup);
+    if (g.layer) {
+      let t = model.tags.find((q) => q.name === g.layer);
+      model.groups[gid].tag = t ? t.id : newTag(g.layer);
+    }
+    ids.forEach((i) => all.add(i));
+    made.push(gid);
+  }
+  if (!all.size) return toast('Berkas SketchUp tidak berisi bidang');
+  selection = G.expandSelection(model, all, editGroup);
+  changed();
+  zoomExtents();
+  toast(`SketchUp ${res.version || ''} diimpor: ${made.length} grup, ${all.size} bidang`);
+  return made;
+}
+
 // ---- Impor OBJ/STL ----
 async function importMesh(given = null) {
   const r = given || (await window.api.importFile());
   if (!r) return;
+  if (r.ext === 'skp') return importSkp(r);
   const buf = r.data.buffer.slice(r.data.byteOffset, r.data.byteOffset + r.data.byteLength);
   const parts = [];
   try {
@@ -5552,6 +5601,70 @@ async function importMesh(given = null) {
   changed();
   zoomExtents();
   toast(`Diimpor: ${ids.size} bidang${big ? ' (satuan mm dikonversi ke m)' : ''}`);
+}
+
+// ---- Ekspor Collada (.dae) untuk dibuka di SketchUp ----
+// Satu node per grup teratas, satu material per warna, Z-atas dalam meter.
+function exportDAE() {
+  const vis = makeVisible(model);
+  const topOf = (g) => {
+    while (g != null && model.groups[g] && model.groups[g].parent != null) g = model.groups[g].parent;
+    return g ?? null;
+  };
+  const nodes = new Map(), mats = new Map();
+  for (const f of model.faces) {
+    if (!vis(f)) continue;
+    const k = topOf(f.group);
+    let nd = nodes.get(k);
+    if (!nd) nodes.set(k, (nd = { name: k != null ? model.groups[k]?.name || 'Grup' : 'Model', vmap: new Map(), pos: [], nor: [], tris: new Map() }));
+    const col = /^#[0-9a-f]{6}$/i.test(f.color) ? f.color.toLowerCase() : '#e8e4dc';
+    if (!mats.has(col)) mats.set(col, 'm' + mats.size);
+    let tl = nd.tris.get(col);
+    if (!tl) nd.tris.set(col, (tl = []));
+    const ni = nd.nor.length / 3;
+    nd.nor.push(...f.n.map((v) => +v.toFixed(5)));
+    for (const p of trisOf(f)) {
+      const key = p.map((v) => v.toFixed(5)).join(' ');
+      let vi = nd.vmap.get(key);
+      if (vi == null) {
+        vi = nd.pos.length / 3;
+        nd.vmap.set(key, vi);
+        nd.pos.push(...p.map((v) => +v.toFixed(5)));
+      }
+      tl.push(vi, ni);
+    }
+  }
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  const rgb = (h) => [1, 3, 5].map((i) => (parseInt(h.slice(i, i + 2), 16) / 255).toFixed(4)).join(' ');
+  const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  const o = [];
+  o.push('<?xml version="1.0" encoding="utf-8"?>', '<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">',
+    `<asset><contributor><authoring_tool>SketchClone</authoring_tool></contributor><created>${now}</created><modified>${now}</modified><unit meter="1" name="meter"/><up_axis>Z_UP</up_axis></asset>`,
+    '<library_effects>');
+  for (const [c, id] of mats) o.push(`<effect id="${id}-fx"><profile_COMMON><technique sid="common"><lambert><diffuse><color>${rgb(c)} 1</color></diffuse></lambert></technique><extra><technique profile="GOOGLEEARTH"><double_sided>1</double_sided></technique></extra></profile_COMMON></effect>`);
+  o.push('</library_effects><library_materials>');
+  for (const [c, id] of mats) o.push(`<material id="${id}" name="warna_${c.slice(1)}"><instance_effect url="#${id}-fx"/></material>`);
+  o.push('</library_materials><library_geometries>');
+  let gi = 0;
+  const sceneNodes = [];
+  for (const nd of nodes.values()) {
+    const id = 'g' + gi++;
+    o.push(`<geometry id="${id}" name="${esc(nd.name)}"><mesh>`,
+      `<source id="${id}-p"><float_array id="${id}-pa" count="${nd.pos.length}">${nd.pos.join(' ')}</float_array><technique_common><accessor source="#${id}-pa" count="${nd.pos.length / 3}" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>`,
+      `<source id="${id}-n"><float_array id="${id}-na" count="${nd.nor.length}">${nd.nor.join(' ')}</float_array><technique_common><accessor source="#${id}-na" count="${nd.nor.length / 3}" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>`,
+      `<vertices id="${id}-v"><input semantic="POSITION" source="#${id}-p"/></vertices>`);
+    const binds = [];
+    for (const [c, tl] of nd.tris) {
+      const m = mats.get(c);
+      o.push(`<triangles material="${m}" count="${tl.length / 6}"><input semantic="VERTEX" source="#${id}-v" offset="0"/><input semantic="NORMAL" source="#${id}-n" offset="1"/><p>${tl.join(' ')}</p></triangles>`);
+      binds.push(`<instance_material symbol="${m}" target="#${m}"/>`);
+    }
+    o.push('</mesh></geometry>');
+    sceneNodes.push(`<node id="n${id}" name="${esc(nd.name)}"><instance_geometry url="#${id}"><bind_material><technique_common>${binds.join('')}</technique_common></bind_material></instance_geometry></node>`);
+  }
+  o.push('</library_geometries><library_visual_scenes><visual_scene id="scene" name="SketchClone">', ...sceneNodes,
+    '</visual_scene></library_visual_scenes><scene><instance_visual_scene url="#scene"/></scene></COLLADA>');
+  return o.join('\n');
 }
 
 // ---- Ekspor glTF (.glb) dengan warna & tekstur ----
@@ -5694,7 +5807,7 @@ async function exportDrawing() {
     }
     cells.push(`<div class="cell"><img src="${data}">${dims}<div class="cap">${VIEWDEF[k].label}${VIEWDEF[k].iso ? '' : ` &nbsp;·&nbsp; SKALA 1:${N}`}</div></div>`);
   }
-  const name = filePath ? filePath.split(/[\\/]/).pop().replace(/\.skc$/, '') : 'Tanpa Judul';
+  const name = filePath ? filePath.split(/[\\/]/).pop().replace(/\.skc$/, '') : model.rab?.project?.name || 'Tanpa Judul';
   const date = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
   const plans = planSheets(vis);
   const more = model.groups && Object.values(model.groups).some((g) => g.wall) ? [...elevSheets(vis, G.bboxOf(model, null, vis)), ...sectionSheets(vis, G.bboxOf(model, null, vis))] : [];
@@ -6953,6 +7066,12 @@ const handleMenu = async (cmd, arg) => {
       p && toast('Ekspor OBJ selesai');
       break;
     }
+    case 'exportDae': {
+      const base = (filePath ? filePath.split(/[\\/]/).pop().replace(/\.skc$/, '') : 'model');
+      const p = await window.api.exportFile('dae', exportDAE(), base + '.dae');
+      p && toast('Ekspor Collada selesai — buka di SketchUp lewat File → Import');
+      break;
+    }
     case 'exportStl': {
       const base = (filePath ? filePath.split(/[\\/]/).pop().replace(/\.skc$/, '') : 'model');
       const p = await window.api.exportFile('stl', G.exportSTL(model), base + '.stl');
@@ -7259,7 +7378,7 @@ window.__sk = {
   setSelection: (ids) => { selection = new Set(ids); refresh(); updateInfo(); },
   type: (t) => { vcbText = t; tool.onVCB && tool.onVCB(vcbText); vcbText = ''; renderVCB(); },
   key: (k) => window.dispatchEvent(new KeyboardEvent('keydown', { key: k })),
-  undo, redo, loadModel, setShadows, solidOp, runScript, sketch, textures, setMat, getCurMat: () => curMat, pluginCommands, applyArray, getLastArray: () => lastArray, C, PR, S, markPhase, markAllExisting, setRenoView, slabFromSelection, beamsFromSelection, placeColumnTool, runStructCheck, applyStructFix, fixAllStruct, getLastCheck: () => lastCheck, exportProposal, companyOf, saveCompany, strukDim, renderProdPane, placeCabinet, prodCutList, prodNesting, buildNet, exportNet, exportCutPdf, exportPrint, getLastNet: () => lastNet, buildHouse, HOUSES, buildAllStructure, toggleStructView, elevSheets, sectionSheets, exportRabPdf, kurvaSvg, rabExtraSheets, placeStairTool, placeMepTool, setStairShape: (v) => (stairShape = v), exportRab, renderKonsPane, addLevel, curLevel, planSheets, roomSliceZ, loadOnlineLib, placeOnline, insertModelAsComponent, exportSelectionComponent, getOnlineLib: () => onlineLib, exportWebViewer, shareToPhone, viewerHtml, runAi, openAi, aiContext, openVersions, newFromTemplate, openKeys, saveKeys, keyTools, recordVideo, sky, exportDrawing, bomData, exportBom, exportDXF, intersectSel, roofSel, showGrips, gripState: () => gripState, fastIds: () => fastIds, openDeform, applyDeform, tessellateSel, mirrorLinked, splinePoints, subdivideSel, roundAllSel, mirrorSel, importReference, filletSel, fitTexture, texMapper, editTexture, exportPNG, serializeProject, applyProjectData, startPlace, LIBRARY, insertLibrary, getFont, textShapes, buildText3D, confirmText3D, getPlaceGen: () => placeGen, boxSelect, openCtx, zoomSelection, fmt, parseNums, eyePos, walkBy, turnView, importMesh, exportGLB, addScene, goScene, showTray, hideSelection, unhideAll, cmd: handleMenu, enterEdit, exitEdit, editGroup: () => editGroup, sunState, styleOf, setStyle, refresh,
+  undo, redo, loadModel, setShadows, solidOp, runScript, sketch, textures, setMat, getCurMat: () => curMat, pluginCommands, applyArray, getLastArray: () => lastArray, C, PR, S, markPhase, markAllExisting, setRenoView, slabFromSelection, beamsFromSelection, placeColumnTool, runStructCheck, applyStructFix, fixAllStruct, getLastCheck: () => lastCheck, exportProposal, companyOf, saveCompany, strukDim, renderProdPane, placeCabinet, prodCutList, prodNesting, buildNet, exportNet, exportCutPdf, exportPrint, getLastNet: () => lastNet, buildHouse, HOUSES, buildAllStructure, toggleStructView, elevSheets, sectionSheets, exportRabPdf, kurvaSvg, rabExtraSheets, placeStairTool, placeMepTool, setStairShape: (v) => (stairShape = v), exportRab, renderKonsPane, addLevel, curLevel, planSheets, roomSliceZ, loadOnlineLib, placeOnline, insertModelAsComponent, exportSelectionComponent, getOnlineLib: () => onlineLib, exportWebViewer, shareToPhone, viewerHtml, runAi, openAi, aiContext, openVersions, newFromTemplate, openKeys, saveKeys, keyTools, recordVideo, sky, exportDrawing, bomData, exportBom, exportDXF, intersectSel, roofSel, showGrips, gripState: () => gripState, fastIds: () => fastIds, openDeform, applyDeform, tessellateSel, mirrorLinked, splinePoints, subdivideSel, roundAllSel, mirrorSel, importReference, filletSel, fitTexture, texMapper, editTexture, exportPNG, serializeProject, applyProjectData, startPlace, LIBRARY, insertLibrary, getFont, textShapes, buildText3D, confirmText3D, getPlaceGen: () => placeGen, boxSelect, openCtx, zoomSelection, fmt, parseNums, eyePos, walkBy, turnView, importMesh, importSkp, exportDAE, exportGLB, addScene, goScene, showTray, hideSelection, unhideAll, cmd: handleMenu, enterEdit, exitEdit, editGroup: () => editGroup, sunState, styleOf, setStyle, refresh,
   mouse(type, x, y, z, extra = {}) {
     const p = this.project(x, y, z);
     if (!p) return;
