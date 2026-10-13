@@ -176,3 +176,24 @@ table.rab.rekap input { width: 44px; }
 #tray .kurva { border: 1px solid #e3e7ec; border-radius: 4px; padding: 2px; background: #fff; }
 #tray .issues { margin: 4px 0; padding-left: 18px; color: #c0392b; font-size: 11px; }
 #tray .kurva svg + svg { margin-top: 4px; }
+/* renovasi, cek struktur, proposal */
+#tray .phbtn { align-items: center; }
+#tray .phbtn button { flex: 1; border-width: 2px; font-weight: 600; }
+#tray .phbtn .ph-exist { border-color: #9aa3ad; } #tray .phbtn .ph-demo { border-color: #e5533d; color: #b8321f; } #tray .phbtn .ph-new { border-color: #e0a400; }
+#tray .rlegend { display: flex; gap: 8px; margin: 4px 0; } #tray .rlegend span { padding: 1px 6px; border-radius: 3px; }
+#tray .rlegend .ex { background: #e6e9ec; } #tray .rlegend .dm { background: #fbe1dc; color: #a12a18; } #tray .rlegend .nw { background: #fdf0cf; }
+#tray .pdgrid.g4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+#tray button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+#tray .cksum { margin: 6px 0 4px; padding: 5px 8px; border-radius: 4px; font-weight: 600; font-size: 12px; }
+#tray .cksum.err { background: #fde3df; color: #9b2414; } #tray .cksum.warn { background: #fff1cc; color: #7a5300; } #tray .cksum.ok { background: #dff3e4; color: #1d6b34; }
+#tray .cklist { max-height: 300px; overflow: auto; border: 1px solid #e3e7ec; border-radius: 4px; }
+#tray .ckrow { display: flex; gap: 6px; align-items: flex-start; padding: 4px 6px; border-bottom: 1px solid #eef1f4; font-size: 11px; line-height: 1.35; }
+#tray .ckrow .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; }
+#tray .ckrow.err .dot { background: #d63c2a; } #tray .ckrow.warn .dot { background: #e0a400; } #tray .ckrow.ok .dot { background: #2f9e55; }
+#tray .ckrow .msg { flex: 1; cursor: pointer; } #tray .ckrow button { flex: none; font-size: 10.5px; padding: 1px 5px; }
+#tray .cobox { border: 1px solid #e3e7ec; border-radius: 4px; padding: 4px 6px; margin: 4px 0; }
+#tray .cobox summary { cursor: pointer; font-size: 12px; font-weight: 600; }
+#tray .cologo { max-height: 28px; max-width: 80px; }
+#tray .protext { width: 100%; box-sizing: border-box; font: 11px "Segoe UI", sans-serif; resize: vertical; }
+#tray .pkgsum { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0; } #tray .pkgsum span { padding: 1px 6px; border-radius: 3px; background: #f1f4f8; } #tray .pkgsum span.on { background: #fff1cc; font-weight: 700; }
+#tray .ckrow { flex-wrap: wrap; } #tray .ckrow .msg { flex: 1 1 calc(100% - 20px); } #tray .ckrow button { margin-left: 14px; }

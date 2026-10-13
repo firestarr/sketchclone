@@ -65,6 +65,8 @@ function buildMenu() {
         { label: 'Laporan Daftar Bahan (Excel)...', click: () => send('exportBom') },
         { label: 'RAB Otomatis (Excel)...', click: () => send('exportRab') },
         { label: 'Laporan RAB (PDF)...', click: () => send('exportRabPdf') },
+        { label: 'Proposal Klien (PDF)...', click: () => send('proposal') },
+        { label: 'Cek Struktur', click: () => send('structCheck') },
         { label: 'Ekspor DXF (AutoCAD)...', click: () => send('exportDxf') },
         { label: 'Ekspor STL...', click: () => send('exportStl') },
         { type: 'separator' },
@@ -395,6 +397,9 @@ API \`sketch\` (semua fungsi pembuat benda mengembalikan id solid, kecuali diseb
 - mep(kind, x, y, z, wallNormal=null, angleDeg=0) — utilitas: lampu (plafon), saklar, stopkontak, ac, exhaust, panel (dinding; beri wallNormal mis. [0,1,0] = menghadap +Y), kloset, wastafel, bakmandi, kran, floordrain, septictank, tandon, pompa; masuk RAB beserta perkiraan kabel & pipa
 - stairs(x, y, angleDeg=0, w=0.9, shape='lurus'|'L'|'U') — tangga beton + reling dari lantai aktif ke lantai di atasnya (naik ke arah +Y diputar angleDeg); lantai ruang atas otomatis dilubangi
 - pondasi({top, bot, h, w, d}) — ukuran pondasi batu kali & galian untuk RAB
+- slab([[x,y],...], zTop, t=0.12) — plat beton (outline 2D, elevasi atas plat). beam([x,y],[x,y], zTop, b=0.15, h=0.3) — balok. column(x, y, b=0.2, H?, footplat?) — kolom struktur di lantai aktif (lantai dasar otomatis berfootplat)
+- Renovasi: existingAll() menandai seluruh model sekarang sebagai bangunan lama; phase(gids, 'exist'|'demo'|'new') menandai grup; yang digambar sesudahnya = pekerjaan baru. RAB hanya menghitung baru + bongkaran
+- structCheck() — daftar masalah/peringatan struktur (plat, balok, kolom, pondasi); fixStructure() menerapkan semua saran
 - level(name, z, h=3.5) — buat/aktifkan lantai bertingkat; dinding & ruang berikutnya dibuat di elevasi lantai tersebut (titik dinding pakai z lantai)
 - library(name, x, y, z=0, angleDeg=0) — sisipkan komponen pustaka: meja, kursi, sofa, ranjang, lemari, pintu, jendela, pohon, manusia, mobil, tangga (mengembalikan id grup)
 - solidFaces(solidId) — daftar id bidang milik solid

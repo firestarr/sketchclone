@@ -9,6 +9,7 @@ import QRCode from 'qrcode';
 import { LIBRARY, insertLibrary } from './library.js';
 import * as C from './construct.js';
 import * as PR from './production.js';
+import * as S from './struktur.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
@@ -408,7 +409,16 @@ function makeVisible(m) {
     gcache.set(g, ok);
     return ok;
   };
-  return (e) => !e.hidden && tagOk(e.tag) && groupOk(gOf(e));
+  // renovasi: 'sebelum' menyembunyikan pekerjaan baru, 'sesudah' menyembunyikan yang dibongkar
+  const rv = m.reno && m.reno.view;
+  const phHide = (rv === 'sebelum' || rv === 'sesudah') && C.renoActive(m) ? (rv === 'sebelum' ? 'new' : 'demo') : null;
+  const pcache = new Map();
+  const phaseOk = (g) => {
+    if (!phHide) return true;
+    if (!pcache.has(g)) pcache.set(g, C.phaseOf(m, g) !== phHide);
+    return pcache.get(g);
+  };
+  return (e) => !e.hidden && tagOk(e.tag) && groupOk(gOf(e)) && phaseOk(gOf(e));
 }
 let visibleFn = () => true;
 
@@ -503,6 +513,13 @@ function rebuild(m, opts = {}) {
 
   // ---- bidang: dikelompokkan per material agar jumlah draw call kecil ----
   const batches = new Map();
+  const phColor = !!(m.reno && m.reno.view === 'warna' && m.groups && C.renoActive(m));
+  const phCache = new Map();
+  const phOf = (f) => {
+    const g = gOf(f);
+    if (!phCache.has(g)) phCache.set(g, C.phaseOf(m, g));
+    return phCache.get(g);
+  };
   for (const f of faces) {
     const tris = trisOf(f);
     if (!tris.length) continue;
@@ -513,9 +530,10 @@ function rebuild(m, opts = {}) {
     const colKey = useTex ? (map ? 't:' + f.tex : f.color) : st.face;
     const finish = st.face === 'shaded' ? f.finish || (f.shiny ? 'glossy' : 'matte') : 'matte';
     const shiny = finish !== 'matte';
-    const key = `${colKey}|${sel ? 1 : 0}|${dim ? 1 : 0}|${f.opacity ?? 1}|${finish}`;
+    const ph = phColor ? phOf(f) : '';
+    const key = `${colKey}|${sel ? 1 : 0}|${dim ? 1 : 0}|${f.opacity ?? 1}|${finish}|${ph}`;
     let b = batches.get(key);
-    if (!b) batches.set(key, (b = { pos: [], nor: [], uv: map ? [] : null, ids: [], f, map, sel, dim, op: f.opacity ?? 1, shiny, finish }));
+    if (!b) batches.set(key, (b = { pos: [], nor: [], uv: map ? [] : null, ids: [], f, map, sel, dim, op: f.opacity ?? 1, shiny, finish, ph }));
     for (const p of tris) {
       b.pos.push(p[0], p[1], p[2]);
       const nn = vnorm.size ? normalAt(f, p) : f.n;
@@ -541,8 +559,11 @@ function rebuild(m, opts = {}) {
     if (st.face === 'mono') col = new THREE.Color('#eceae4');
     else if (st.face === 'hidden' || st.face === 'wire') col = new THREE.Color('#ffffff');
     else col = new THREE.Color(b.map ? '#ffffff' : b.f.color);
+    if (b.ph === 'exist') col.lerp(new THREE.Color('#9aa3ad'), 0.6);
+    else if (b.ph === 'demo') col.lerp(new THREE.Color('#e5533d'), 0.75);
+    else if (b.ph === 'new') col.lerp(new THREE.Color('#f4b63f'), 0.22);
     if (b.sel) col.lerp(new THREE.Color(0x3b82f6), 0.5);
-    const opacity = Math.min(st.face === 'xray' || b.dim ? 0.35 : 1, b.op, b.finish === 'glass' ? 0.28 : 1);
+    const opacity = Math.min(st.face === 'xray' || b.dim ? 0.35 : 1, b.op, b.finish === 'glass' ? 0.28 : 1, b.ph === 'demo' ? 0.55 : 1);
     const base = {
       polygonOffset: true,
       polygonOffsetFactor: 1,
@@ -2155,6 +2176,163 @@ function toggleStructView(on) {
   snapCache = null;
   changed();
 }
+// ---- Renovasi: tandai eksisting / dibongkar / baru ----
+function topGroupsOfSelection(looseName) {
+  const tops = new Set(), loose = new Set();
+  for (const e of [...model.faces, ...model.lines]) {
+    if (!selection.has(e.id)) continue;
+    let g = gOf(e);
+    if (g === editGroup) { loose.add(e.id); continue; }
+    while (g != null && (model.groups[g]?.parent ?? null) !== editGroup) g = model.groups[g]?.parent ?? null;
+    if (g != null) tops.add(g);
+  }
+  if (loose.size && looseName) tops.add(G.makeGroup(model, expand(loose), looseName, false, editGroup));
+  return tops;
+}
+function markPhase(phase) {
+  if (!selection.size) return toast('Pilih bagian bangunan dulu (dinding, atap, ruang, kusen, plat, ...), lalu klik fasenya.');
+  const tops = topGroupsOfSelection(C.PHASE_LABEL[phase]);
+  C.setPhase(model, [...tops], phase);
+  model.reno = { view: 'warna', ...(model.reno || {}) };
+  changed();
+  toast(`${tops.size} objek ditandai ${C.PHASE_LABEL[phase]}`);
+}
+function markAllExisting() {
+  const tops = Object.entries(model.groups).filter(([, g]) => (g.parent ?? null) === null && !g.struct).map(([k]) => +k);
+  const loose = new Set(model.faces.filter((f) => f.group == null).map((f) => f.id));
+  if (loose.size) tops.push(G.makeGroup(model, loose, 'Eksisting', false, null));
+  if (!tops.length) return toast('Model masih kosong. Gambar dulu kondisi bangunan yang sudah ada.');
+  C.setPhase(model, tops, 'exist');
+  model.reno = { ...(model.reno || {}), view: 'warna' };
+  changed();
+  toast(`Kondisi sekarang (${tops.length} objek) ditandai Eksisting. Semua yang digambar setelah ini dihitung sebagai pekerjaan Baru.`);
+}
+function setRenoView(v) {
+  model.reno = { ...(model.reno || {}), view: v };
+  snapCache = null;
+  changed();
+}
+
+// ---- Elemen struktur: plat, balok, kolom + cek struktur ----
+const strukDim = { t: 0.12, bw: 0.15, bh: 0.3, cb: 0.2 };
+function offsetPoly(P, d) {
+  const sa = P.reduce((a, p, i) => { const q = P[(i + 1) % P.length]; return a + p[0] * q[1] - q[0] * p[1]; }, 0);
+  const Q = sa < 0 ? P.slice().reverse() : P;
+  const n = Q.length;
+  const lines = Q.map((a, i) => {
+    const b = Q[(i + 1) % n], L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    const nx = (b[1] - a[1]) / L, ny = -(b[0] - a[0]) / L;
+    return { a: [a[0] + nx * d, a[1] + ny * d], u: [(b[0] - a[0]) / L, (b[1] - a[1]) / L] };
+  });
+  return Q.map((_, i) => {
+    const l1 = lines[(i - 1 + n) % n], l2 = lines[i];
+    const den = l1.u[0] * l2.u[1] - l1.u[1] * l2.u[0];
+    if (Math.abs(den) < 1e-6) return l2.a;
+    const t = ((l2.a[0] - l1.a[0]) * l2.u[1] - (l2.a[1] - l1.a[1]) * l2.u[0]) / den;
+    return [l1.a[0] + l1.u[0] * t, l1.a[1] + l1.u[1] * t];
+  });
+}
+function elemTag(gid, z) {
+  const L = C.levelsOf(model), lv = L[C.levelAt(model, z)];
+  if (gid != null && lv?.tag != null && model.groups[gid]) model.groups[gid].tag = lv.tag;
+  return gid;
+}
+function slabFromSelection() {
+  const ids = expand(selection);
+  const L = C.levelsOf(model);
+  const made = [];
+  const rooms = new Set();
+  for (const f of model.faces) if (ids.has(f.id) && model.groups[f.group]?.room) rooms.add(f.group);
+  for (const rg of rooms) {
+    const r = model.groups[rg].room, f = model.faces.find((q) => q.group === rg);
+    if (!f) continue;
+    const li = C.levelAt(model, r.z), zTop = L[li + 1] ? L[li + 1].z : r.z + L[li].h;
+    made.push(elemTag(C.makeSlab(model, offsetPoly(f.pts.map((p) => [p[0], p[1]]), 0.075), zTop, strukDim.t, editGroup), zTop - 0.5));
+  }
+  for (const f of model.faces.filter((q) => ids.has(q.id) && Math.abs(q.n[2]) > 0.99 && !model.groups[q.group]?.room && !model.groups[q.group]?.slab)) {
+    const zTop = f.pts[0][2];
+    const gid = C.makeSlab(model, f.pts.map((p) => [p[0], p[1]]), zTop, strukDim.t, editGroup);
+    if (gid == null) continue;
+    made.push(elemTag(gid, zTop - 0.5));
+    if (f.solid == null) G.deleteIds(model, new Set([f.id]));
+  }
+  if (!made.length) return toast('Pilih ruang (plat dibuat di atasnya, setebal pengaturan) atau gambar persegi di ketinggian atas plat lalu pilih bidangnya.');
+  selection = new Set();
+  changed();
+  toast(`${made.length} plat beton ${Math.round(strukDim.t * 100)} cm dibuat. Klik "Cek struktur" untuk memeriksa tumpuannya.`);
+}
+function beamsFromSelection() {
+  const ids = expand(selection);
+  let n = 0;
+  for (const l of model.lines) {
+    if (!ids.has(l.id) || Math.abs(l.a[2] - l.b[2]) > 0.01) continue;
+    if (elemTag(C.makeBeam(model, [l.a[0], l.a[1]], [l.b[0], l.b[1]], l.a[2], strukDim.bw, strukDim.bh, editGroup), l.a[2] - 0.5) != null) n++;
+  }
+  const slabs = new Set();
+  for (const f of model.faces) if (ids.has(f.id) && model.groups[f.group]?.slab) slabs.add(f.group);
+  for (const sg of slabs) {
+    const sl = model.groups[sg].slab;
+    for (const [a, b] of S.slabFreeEdges(model, sg)) {
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const h = Math.max(strukDim.bh, Math.ceil((L / 12) * 20 - 1e-9) / 20);
+      if (elemTag(C.makeBeam(model, a, b, sl.z, Math.max(strukDim.bw, Math.ceil(h * 0.4 * 20 - 1e-9) / 20), h, editGroup), sl.z - 0.5) != null) n++;
+    }
+  }
+  if (!n) return toast('Pilih garis datar (as balok, digambar di ketinggian atas balok) atau pilih plat untuk membuat balok di tepi yang belum ditopang.');
+  selection = new Set();
+  changed();
+  toast(`${n} balok dibuat. Klik "Cek struktur" untuk memeriksa ukuran & tumpuannya.`);
+}
+function placeColumnTool() {
+  const lv = curLevel(), H = nextLevelHeight(), b = strukDim.cb, ground = (model.activeLevel || 0) === 0;
+  toast(`Kolom struktur ${Math.round(b * 100)}/${Math.round(b * 100)} setinggi ${fmt(H)}${ground ? ' + footplat 80×80' : ''}: klik titik kolom.`);
+  startPlace({
+    label: 'Kolom struktur',
+    gen: (m, at) => {
+      const real = m === model;
+      const gid = C.makeColumn(m, at.x, at.y, real ? lv.z : 0, H, b, { foot: ground ? 0.8 : 0, depth: 1.0 }, real ? editGroup : null);
+      if (real) levelTag(gid);
+      return { gid, ids: G.entitiesInTree(m, gid) };
+    },
+  });
+}
+let lastCheck = null;
+const strukTag = () => model.tags.find((t) => t.name === 'Struktur')?.id;
+function runStructCheck() {
+  lastCheck = S.structCheck(model);
+  showTray('kons');
+  renderKonsPane();
+  const n = lastCheck.n;
+  toast(n.err ? `Cek struktur: ${n.err} masalah serius, ${n.warn} peringatan — lihat panel Konstruksi` : n.warn ? `Cek struktur: ${n.warn} peringatan, tidak ada masalah serius` : 'Cek struktur: semua elemen memenuhi aturan praktis');
+  return lastCheck;
+}
+function tagNewElems() {
+  for (const [k, g] of Object.entries(model.groups)) {
+    if (g.tag != null) continue;
+    if (g.slab || g.beam) elemTag(+k, (g.slab || g.beam).z - 0.5);
+    else if (g.column) elemTag(+k, g.column.z + 0.1);
+  }
+}
+function applyStructFix(fix) {
+  S.applyFix(model, fix, { parent: editGroup, tag: strukTag() });
+  tagNewElems();
+  lastCheck = S.structCheck(model);
+  changed();
+}
+function fixAllStruct() {
+  let n = 0;
+  for (let it = 0; it < 5; it++) {
+    const fx = S.structCheck(model).items.filter((x) => x.fix && x.lvl !== 'ok');
+    if (!fx.length) break;
+    for (const x of fx) n += S.applyFix(model, x.fix, { parent: editGroup, tag: strukTag() });
+  }
+  tagNewElems();
+  lastCheck = S.structCheck(model);
+  changed();
+  toast(`${n} perbaikan diterapkan · sisa ${lastCheck.n.err} masalah, ${lastCheck.n.warn} peringatan`);
+  return lastCheck;
+}
+
 function placeStairTool(opt = {}) {
   const sp = C.stairSpec(nextLevelHeight(), { shape: stairShape, ...opt });
   toast(`Tangga ${sp.n} anak tangga (optrede ${fmt(sp.R)}, antrede ${fmt(sp.T)}), panjang ${fmt(sp.n * sp.T)}. Klik kaki tangga; panah kiri/kanan memutar.`);
@@ -4502,6 +4680,7 @@ async function exportPNG(scale = 2, toFile = true) {
   renderer.setPixelRatio(pr);
   renderer.setSize(stage.clientWidth, stage.clientHeight, false);
   requestRender();
+  if (toFile === 'url') return c2.toDataURL('image/jpeg', 0.9);
   const blob = await new Promise((r) => c2.toBlob(r, 'image/png'));
   const bytes = new Uint8Array(await blob.arrayBuffer());
   if (!toFile) return bytes.length;
@@ -4690,6 +4869,16 @@ const sketch = {
     levelTag(r.gid);
     return r.gid;
   },
+  slab(pts, zTop, t = 0.12) { return elemTag(C.makeSlab(model, pts, zTop, t, editGroup), zTop - 0.5); },
+  beam(a, b, zTop, bw = 0.15, h = 0.3) { return elemTag(C.makeBeam(model, a, b, zTop, bw, h, editGroup), zTop - 0.5); },
+  column(x, y, b = 0.2, H, foot) {
+    const lv = curLevel(), ground = (model.activeLevel || 0) === 0;
+    return levelTag(C.makeColumn(model, x, y, lv.z, H ?? nextLevelHeight(), b, { foot: foot ?? (ground ? 0.8 : 0), depth: 1.0 }, editGroup));
+  },
+  phase(gids, ph) { if (!C.PHASE_LABEL[ph]) throw new Error("fase: 'exist' | 'demo' | 'new'"); model.reno = { view: 'warna', ...(model.reno || {}) }; return C.setPhase(model, [].concat(gids), ph); },
+  existingAll() { markAllExisting(); },
+  structCheck() { return S.structCheck(model).items.filter((x) => x.lvl !== 'ok').map((x) => `${x.lvl === 'err' ? 'MASALAH' : 'PERINGATAN'} ${x.el}: ${x.msg}`); },
+  fixStructure() { return fixAllStruct().n; },
   pondasi(p) { model.rab ||= {}; model.rab.pondasi = { ...(model.rab.pondasi || {}), ...p }; return C.pondasiOf(model); },
   roof(solidIds, pitchDeg = 30, overhang = 0.4) {
     const ids = new Set(solidIds.flatMap((sid) => this.solidFaces(sid)));
@@ -5536,6 +5725,7 @@ async function exportDrawing() {
     .plan .mep circle { fill: #fff; stroke: #1f5fa8; stroke-width: 2; } .plan .mep path { stroke: #1f5fa8; stroke-width: 2; } .plan .mep text { fill: #1f5fa8; font-size: 12px; font-weight: 700; }
     .plan .leaf { stroke: #111; stroke-width: 3; } .plan .swing { stroke: #555; stroke-width: 1.5; fill: none; stroke-dasharray: 8 5; }
     .plan .rn { font-size: 22px; font-weight: 700; fill: #1d2b3a; } .plan .ra { font-size: 19px; fill: #44515f; }
+    ${PLAN_EXTRA_CSS}
     .plan .dim line { stroke: #c0392b; stroke-width: 2; } .plan .dim text { fill: #c0392b; font-size: 22px; font-weight: 600; }
   </style></head><body><div class="sheet"><div class="frame"></div><div class="grid">${cells.join('')}</div>
     <div class="title"><div>PROYEK<b>${escHtml(name)}</b></div><div>TANGGAL<b>${escHtml(date)}</b></div><div>SATUAN / SKALA<b>${escHtml(unitOf().u)} · 1:${N}</b></div></div>
@@ -5552,6 +5742,10 @@ async function exportDrawing() {
   return html.length;
 }
 
+const PLAN_EXTRA_CSS = `.plan .cut-ex { stroke: #8f979f; } .plan .cut-dm { stroke: #d63c2a; stroke-dasharray: 10 7; stroke-width: 4; }
+    .plan .beam { stroke: #5b6470; stroke-width: 2.5; stroke-dasharray: 16 8; } .plan .btag { fill: #5b6470; font-size: 14px; font-weight: 700; }
+    .rleg { position: absolute; left: 2mm; top: 2mm; background: #fff; border: 0.3mm solid #555; padding: 1.5mm 2.5mm; font-size: 2.8mm; display: flex; gap: 3mm; align-items: center; }
+    .rleg i { display: inline-block; width: 7mm; height: 1.4mm; margin-right: 1.2mm; vertical-align: middle; } .rleg .ex { background: #8f979f; } .rleg .nw { background: #111; } .rleg .dm { background: repeating-linear-gradient(90deg, #d63c2a 0 2mm, transparent 2mm 3.2mm); }`;
 // Lembar denah per lantai: irisan dinding tebal + nama & luas ruang + dimensi luar.
 function planSheets(vis) {
   const L = C.levelsOf(model);
@@ -5561,6 +5755,8 @@ function planSheets(vis) {
     if (!walls.length) return;
     const ids = new Set();
     for (const [gid] of walls) for (const id of G.entitiesInTree(model, +gid)) ids.add(id);
+    // kolom struktur lantai ini & balok di atasnya ikut masuk bingkai denah
+    for (const [gid, g] of Object.entries(model.groups)) if ((g.column && Math.abs(g.column.z - lv.z) < 0.1) || (g.beam && g.beam.z > lv.z + 0.5 && g.beam.z <= lv.z + lv.h + 0.06)) for (const id of G.entitiesInTree(model, +gid)) if (vis(model.faces.find((f) => f.id === id) || {})) ids.add(id);
     const box = G.bboxOf(model, ids, vis);
     const size = box.getSize(new THREE.Vector3());
     const W = 1600, H = 1010;
@@ -5576,7 +5772,12 @@ function planSheets(vis) {
       const v = new THREE.Vector3(x, y, z).project(cam);
       return [((v.x + 1) / 2) * W, ((1 - v.y) / 2) * H];
     };
-    const segs = C.sliceSegments(model, cutZ, (f) => vis(f) && ids.has(f.id) && f.part !== 'leaf');
+    const renoOn = C.renoActive(model) && !(model.reno && (model.reno.view === 'sebelum' || model.reno.view === 'sesudah'));
+    const phc = new Map();
+    const fph = (f) => { const g = f.group ?? null; if (!phc.has(g)) phc.set(g, C.phaseOf(model, g)); return phc.get(g); };
+    const segs = C.sliceSegments(model, cutZ, (f) => vis(f) && ids.has(f.id) && f.part !== 'leaf' && (!renoOn || fph(f) === 'new'));
+    const segsEx = renoOn ? C.sliceSegments(model, cutZ, (f) => vis(f) && ids.has(f.id) && f.part !== 'leaf' && fph(f) === 'exist') : [];
+    const segsDm = renoOn ? C.sliceSegments(model, cutZ, (f) => vis(f) && ids.has(f.id) && f.part !== 'leaf' && fph(f) === 'demo') : [];
     let swings = '';
     for (const [gid, g] of Object.entries(model.groups)) {
       const op = g.opening;
@@ -5591,7 +5792,9 @@ function planSheets(vis) {
       const sweep = (sx - hx) * (oy - hy) - (sy - hy) * (ox - hx) > 0 ? 1 : 0;
       swings += `<line class="leaf" x1="${hx.toFixed(1)}" y1="${hy.toFixed(1)}" x2="${ox.toFixed(1)}" y2="${oy.toFixed(1)}"/><path class="swing" d="M${sx.toFixed(1)} ${sy.toFixed(1)} A${rr.toFixed(1)} ${rr.toFixed(1)} 0 0 ${sweep} ${ox.toFixed(1)} ${oy.toFixed(1)}"/>`;
     }
-    const lines = segs.map(([a, b]) => { const p = sp(a[0], a[1], cutZ), q = sp(b[0], b[1], cutZ); return `<line class="cut" x1="${p[0].toFixed(1)}" y1="${p[1].toFixed(1)}" x2="${q[0].toFixed(1)}" y2="${q[1].toFixed(1)}"/>`; }).join('');
+    const segLines = (arr, cls) => arr.map(([a, b]) => { const p = sp(a[0], a[1], cutZ), q = sp(b[0], b[1], cutZ); return `<line class="${cls}" x1="${p[0].toFixed(1)}" y1="${p[1].toFixed(1)}" x2="${q[0].toFixed(1)}" y2="${q[1].toFixed(1)}"/>`; }).join('');
+    const lines = segLines(segsEx, 'cut cut-ex') + segLines(segsDm, 'cut cut-dm') + segLines(segs, 'cut');
+    const renoLegend = renoOn ? `<div class="rleg"><b>RENOVASI</b><span><i class="ex"></i>Eksisting</span><span><i class="dm"></i>Dibongkar</span><span><i class="nw"></i>Baru</span></div>` : '';
     const ABBR = { lampu: 'L', saklar: 'S', stopkontak: 'SK', ac: 'AC', exhaust: 'EF', panel: 'P', kloset: 'WC', wastafel: 'WT', bakmandi: 'BM', kran: 'K', floordrain: 'FD', septictank: 'ST', tandon: 'TA', pompa: 'PA' };
     let mepSyms = '';
     for (const g of Object.values(model.groups)) {
@@ -5604,10 +5807,11 @@ function planSheets(vis) {
       mepSyms += `<g class="mep"><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="13"/>${lamp ? `<path d="M${x - 9} ${y - 9}L${x + 9} ${y + 9}M${x + 9} ${y - 9}L${x - 9} ${y + 9}"/>` : `<text x="${x.toFixed(1)}" y="${(y + 5).toFixed(1)}" text-anchor="middle">${ABBR[g.mep.kind]}</text>`}</g>`;
     }
     let area = 0;
-    const rooms = Object.entries(model.groups).filter(([gid, g]) => g.room && Math.abs(g.room.z - lv.z) < 0.1 && vis({ group: +gid })).map(([, g]) => {
+    const rooms = Object.entries(model.groups).filter(([gid, g]) => g.room && Math.abs(g.room.z - lv.z) < 0.1 && vis({ group: +gid })).map(([gid, g]) => {
       area += g.room.area;
       const lab = model.labels.find((l) => l.id === g.room.label);
-      const c = lab ? lab.p : [box.min.x, box.min.y, lv.z];
+      const rf = !lab && model.faces.find((f) => (f.group ?? null) === +gid);
+      const c = lab ? lab.p : rf ? rf.pts.reduce((a, p) => [a[0] + p[0] / rf.pts.length, a[1] + p[1] / rf.pts.length], [0, 0]) : [box.min.x, box.min.y, lv.z];
       const [x, y] = sp(c[0], c[1], lv.z);
       return `<text class="rn" x="${x}" y="${y - 30}" text-anchor="middle">${escHtml(g.room.name)}</text><text class="ra" x="${x}" y="${y - 8}" text-anchor="middle">${g.room.area.toFixed(2)} m²</text>`;
     }).join('');
@@ -5617,12 +5821,24 @@ function planSheets(vis) {
     let extra = '';
     for (const g of Object.values(model.groups)) {
       if (!g.struct?.colPts || Math.abs(g.struct.z - lv.z) > 0.1) continue;
+      const hb = (g.struct.colB || 0.15) / 2;
       for (const [cx, cy, ang] of g.struct.colPts) {
         const pts4 = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, c]) => {
-          const lx = (a * 0.075), ly = (c * 0.075);
+          const lx = (a * hb), ly = (c * hb);
           return sp(cx + lx * Math.cos(ang) - ly * Math.sin(ang), cy + lx * Math.sin(ang) + ly * Math.cos(ang), cutZ);
         });
         extra += `<polygon class="col" points="${pts4.map((q) => q.map((v) => v.toFixed(1)).join(',')).join(' ')}"/>`;
+      }
+    }
+    // kolom struktur & balok di atas lantai ini (garis putus-putus)
+    for (const g of Object.values(model.groups)) {
+      if (g.column && Math.abs(g.column.z - lv.z) < 0.1) {
+        const c = g.column, [x1, y1] = sp(c.x - c.b / 2, c.y + c.b / 2, cutZ), [x2, y2] = sp(c.x + c.b / 2, c.y - c.b / 2, cutZ);
+        extra += `<rect class="col" x="${Math.min(x1, x2).toFixed(1)}" y="${Math.min(y1, y2).toFixed(1)}" width="${Math.abs(x2 - x1).toFixed(1)}" height="${Math.abs(y2 - y1).toFixed(1)}"/>`;
+      }
+      if (g.beam && g.beam.z > lv.z + 0.5 && g.beam.z <= lv.z + lv.h + 0.06) {
+        const bm = g.beam, [x1, y1] = sp(bm.p1[0], bm.p1[1], cutZ), [x2, y2] = sp(bm.p2[0], bm.p2[1], cutZ);
+        extra += `<line class="beam" x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"/><text class="btag" x="${((x1 + x2) / 2).toFixed(1)}" y="${((y1 + y2) / 2 - 8).toFixed(1)}" text-anchor="middle">B ${Math.round(bm.b * 100)}/${Math.round(bm.h * 100)}</text>`;
       }
     }
     // kode kusen di dekat bukaan
@@ -5670,7 +5886,7 @@ function planSheets(vis) {
       <text x="${x - 12}" y="${(t + b) / 2}" text-anchor="middle" transform="rotate(-90 ${x - 12} ${(t + b) / 2})">${escHtml(fmt(size.y))}</text></g>`;
     out.push({
       title: 'DENAH ' + lv.name.toUpperCase(), N, area: area ? area.toFixed(2) + ' m²' : '-',
-      body: `<img src="${data}"><svg viewBox="0 0 ${W} ${H}">${lines}${extra}${swings}${mepSyms}${rooms}${dims}</svg>${kt}`,
+      body: `<img src="${data}"><svg viewBox="0 0 ${W} ${H}">${lines}${extra}${swings}${mepSyms}${rooms}${dims}</svg>${kt}${renoLegend}`,
     });
   });
   return out;
@@ -6078,6 +6294,24 @@ function renderKonsPane() {
     mkEl('button', { textContent: 'Hanya lantai aktif', disabled: L.length < 2, onclick: () => { L.forEach((lv, i) => { const t = model.tags.find((x) => x.id === lv.tag); if (t) t.visible = i === (model.activeLevel || 0); }); snapCache = null; changed(); } }),
     mkEl('button', { textContent: 'Semua', disabled: L.length < 2, onclick: () => { L.forEach((lv) => { const t = model.tags.find((x) => x.id === lv.tag); if (t) t.visible = true; }); snapCache = null; changed(); } }),
   ));
+  // ---- renovasi
+  P.append(mkEl('div', { className: 'ttl', textContent: 'Renovasi' }));
+  const reno = C.renoActive(model);
+  P.append(mkEl('div', { className: 'btnrow' },
+    mkEl('button', { textContent: 'Semua yang ada = Eksisting', title: 'Tandai seluruh model sekarang sebagai bangunan lama. Yang digambar sesudahnya otomatis dihitung pekerjaan baru.', onclick: markAllExisting })));
+  P.append(mkEl('div', { className: 'btnrow phbtn' }, mkEl('span', { className: 'small', textContent: 'Tandai pilihan:' }),
+    mkEl('button', { className: 'ph-exist', textContent: 'Eksisting', title: 'Bangunan lama yang dipertahankan (tidak masuk RAB)', onclick: () => markPhase('exist') }),
+    mkEl('button', { className: 'ph-demo', textContent: 'Dibongkar', title: 'Masuk RAB sebagai pekerjaan bongkaran + buang puing', onclick: () => markPhase('demo') }),
+    mkEl('button', { className: 'ph-new', textContent: 'Baru', title: 'Pekerjaan baru (masuk RAB penuh)', onclick: () => markPhase('new') })));
+  if (reno) {
+    const cnt = { exist: 0, demo: 0, new: 0 };
+    for (const [k, g] of Object.entries(model.groups)) if (['wall', 'opening', 'room', 'roof', 'stair', 'mep', 'slab', 'beam', 'column'].some((q) => g[q])) cnt[C.phaseOf(model, +k)]++;
+    P.append(trow('Tampilan', mkEl('select', { onchange: (e) => setRenoView(e.target.value) },
+      ...[['warna', 'Warna fase'], ['sebelum', 'Kondisi lama (sebelum)'], ['sesudah', 'Rencana (sesudah)'], ['normal', 'Normal']].map(([v, t]) => mkEl('option', { value: v, textContent: t, selected: (model.reno?.view || 'warna') === v })))));
+    P.append(mkEl('div', { className: 'rlegend small' }, mkEl('span', { className: 'ex' }, `Eksisting ${cnt.exist}`), mkEl('span', { className: 'dm' }, `Dibongkar ${cnt.demo}`), mkEl('span', { className: 'nw' }, `Baru ${cnt.new}`)));
+    P.append(mkEl('div', { className: 'muted small', textContent: 'RAB hanya menghitung pekerjaan baru + bongkaran (termasuk bobok dinding lama untuk pintu/jendela baru). Denah memakai warna standar: abu-abu = eksisting, merah putus-putus = dibongkar, hitam = baru.' }));
+  } else P.append(mkEl('div', { className: 'muted small', textContent: 'Untuk renovasi: gambar dulu kondisi bangunan sekarang, klik "Semua yang ada = Eksisting", tandai bagian yang akan dibongkar, lalu gambar pekerjaan baru. RAB otomatis hanya menghitung perubahannya.' }));
+
   P.append(mkEl('div', { className: 'ttl', textContent: 'Struktur' }));
   const nStruct = Object.values(model.groups).filter((g) => g.struct).length;
   const structOnly = Object.values(model.groups).some((g) => g.wall && g.hidden);
@@ -6089,6 +6323,37 @@ function renderKonsPane() {
     const bb = C.bbs(model);
     if (bb.rows.length) {
       P.append(mkEl('div', { className: 'muted small', textContent: 'Pembesian (besi 12 m): ' + bb.perBar.map((x) => `${x.bar} ${x.batang} btg (${x.kg.toLocaleString('id-ID')} kg)`).join(' · ') + ` · total ${bb.totalKg.toLocaleString('id-ID')} kg` }));
+    }
+  }
+  {
+    const num = (k, label, tip) => mkEl('label', { title: tip }, label, mkEl('input', { type: 'number', step: 1, min: 10, value: Math.round(strukDim[k] * 100), onchange: (e) => { strukDim[k] = Math.max(0.08, (+e.target.value || 0) / 100); } }));
+    P.append(mkEl('div', { className: 'msec', textContent: 'Elemen beton (cm)' }));
+    P.append(mkEl('div', { className: 'pdgrid g4' }, num('t', 'Tebal plat', 'Tebal plat beton'), num('bw', 'Lebar balok', 'Lebar balok'), num('bh', 'Tinggi balok', 'Tinggi total balok'), num('cb', 'Kolom', 'Sisi kolom struktur')));
+    P.append(mkEl('div', { className: 'btnrow' },
+      mkEl('button', { textContent: 'Plat', title: 'Pilih ruang (plat di atasnya) atau bidang persegi di ketinggian atas plat', onclick: slabFromSelection }),
+      mkEl('button', { textContent: 'Balok', title: 'Pilih garis as balok, atau pilih plat untuk balok di tepi yang belum ditopang', onclick: beamsFromSelection }),
+      mkEl('button', { textContent: '+ Kolom', title: 'Klik untuk menaruh kolom struktur (lantai dasar: dengan footplat)', onclick: placeColumnTool }),
+      mkEl('button', { className: 'primary', textContent: 'Cek struktur', title: 'Periksa tebal plat, ukuran balok, beban kolom & pondasi', onclick: runStructCheck })));
+    if (lastCheck) {
+      lastCheck = S.structCheck(model);
+      const n = lastCheck.n;
+      const so = S.optsOf(model);
+      const setO = (k) => (e) => { model.rab ||= {}; model.rab.struk = { ...(model.rab.struk || {}), [k]: Math.max(0.1, +e.target.value || 0) }; changed(); };
+      P.append(mkEl('div', { className: 'pdgrid' },
+        mkEl('label', { title: 'Daya dukung tanah izin (100 kN/m² ≈ 1 kg/cm², tanah sedang)' }, 'Tanah kN/m²', mkEl('input', { type: 'number', step: 10, value: so.soil, onchange: setO('soil') })),
+        mkEl('label', { title: 'Beban hidup lantai/dak (rumah 2 kN/m²)' }, 'Beban hidup', mkEl('input', { type: 'number', step: 0.5, value: so.LL, onchange: setO('LL') })),
+        mkEl('label', { title: 'Mutu beton fc (K-225 ≈ 18,7 MPa)' }, 'fc MPa', mkEl('input', { type: 'number', step: 0.5, value: so.fc, onchange: setO('fc') }))));
+      P.append(mkEl('div', { className: 'cksum ' + (n.err ? 'err' : n.warn ? 'warn' : 'ok') }, n.err ? `${n.err} masalah serius · ${n.warn} peringatan · ${n.ok} OK` : n.warn ? `${n.warn} peringatan · ${n.ok} OK` : `Semua ${n.ok} pemeriksaan OK`));
+      if (lastCheck.items.some((x) => x.fix && x.lvl !== 'ok')) P.append(mkEl('div', { className: 'btnrow' }, mkEl('button', { textContent: 'Terapkan semua saran', onclick: fixAllStruct })));
+      const list = mkEl('div', { className: 'cklist' });
+      for (const it of lastCheck.items) {
+        list.append(mkEl('div', { className: 'ckrow ' + it.lvl },
+          mkEl('span', { className: 'dot' }),
+          mkEl('span', { className: 'msg', textContent: `${it.el}: ${it.msg}`, title: 'Klik untuk memilih elemen', onclick: () => { if (it.gid != null && model.groups[it.gid]) { selection = new Set(G.entitiesInTree(model, it.gid)); refresh(); } } }),
+          it.fix && it.lvl !== 'ok' ? mkEl('button', { textContent: it.fix.label || 'Perbaiki', onclick: () => applyStructFix(it.fix) }) : null));
+      }
+      P.append(list);
+      P.append(mkEl('div', { className: 'muted small', textContent: 'Cek cepat berdasarkan aturan praktis SNI 2847 & SNI 1727 untuk rumah tinggal (beban terfaktor 1,2D + 1,6L). Bukan pengganti perhitungan dan tanda tangan insinyur sipil — gunakan sebagai peringatan dini.' }));
     }
   }
   P.append(mkEl('div', { className: 'ttl', textContent: 'Listrik & Sanitasi' }));
@@ -6191,6 +6456,209 @@ function renderKonsPane() {
     mkEl('button', { textContent: 'Harga default', title: 'Kembalikan semua harga ke AHSP', onclick: () => { model.rab.prices = {}; changed(); } }),
   ));
   P.append(mkEl('div', { className: 'muted small', textContent: 'Harga dari AHSP (repo RAB_Bangunan). Volume: bata = luas dinding dikurangi bukaan; plester & acian 2 sisi; pondasi & sloof untuk dinding lantai dasar; kolom praktis tiap sudut + tiap 3 m.' }));
+  renderProposalSection(P);
+}
+
+// ======================= Proposal klien =======================
+const COMPANY_KEY = 'sketchclone.company';
+function companyOf() {
+  try { return JSON.parse(localStorage.getItem(COMPANY_KEY) || '{}') || {}; } catch { return {}; }
+}
+function saveCompany(c) {
+  try { localStorage.setItem(COMPANY_KEY, JSON.stringify(c)); } catch {}
+}
+const TERMIN_DEFAULT = '30; Uang muka saat penandatanganan kontrak\n30; Pekerjaan struktur selesai (progres ± 50%)\n30; Pekerjaan finishing (progres ± 90%)\n10; Serah terima setelah masa pemeliharaan 1 bulan';
+const SYARAT_DEFAULT = 'Harga berlaku untuk lingkup pekerjaan sesuai gambar & spesifikasi pada proposal ini.\nPekerjaan tambah/kurang dihitung terpisah berdasarkan harga satuan pada RAB.\nIzin bangunan (PBG), listrik PLN & air PDAM disediakan oleh pemilik kecuali disepakati lain.\nMasa pemeliharaan 1 bulan setelah serah terima pertama.\nJadwal dapat bergeser karena cuaca ekstrem atau perubahan desain dari pemilik.';
+function proposalOf() {
+  model.rab ||= {};
+  model.rab.proposal ||= {};
+  const p = model.rab.proposal;
+  return { client: '', clientAddr: '', pkg: 'standar', three: true, detail: false, valid: 30, termin: TERMIN_DEFAULT, syarat: SYARAT_DEFAULT, ...p };
+}
+function renderProposalSection(P) {
+  const co = companyOf(), pp = proposalOf();
+  const setC = (k) => (e) => { const c = companyOf(); c[k] = e.target.value; saveCompany(c); };
+  const setP = (k, f = (v) => v) => (e) => { model.rab.proposal = { ...(model.rab.proposal || {}), [k]: f(e.target.type === 'checkbox' ? e.target.checked : e.target.value) }; changed(); };
+  P.append(mkEl('div', { className: 'ttl', textContent: 'Proposal Klien' }));
+  const det = mkEl('details', { className: 'cobox' }, mkEl('summary', { textContent: co.name ? `Perusahaan: ${co.name}` : 'Profil perusahaan (kop & tanda tangan)' }),
+    trow('Nama', mkEl('input', { value: co.name || '', placeholder: 'CV / PT / nama kontraktor', onchange: setC('name') })),
+    trow('Alamat', mkEl('input', { value: co.addr || '', onchange: setC('addr') })),
+    trow('Telepon', mkEl('input', { value: co.phone || '', onchange: setC('phone') })),
+    trow('Email/web', mkEl('input', { value: co.email || '', onchange: setC('email') })),
+    trow('Penanda tangan', mkEl('input', { value: co.signer || '', onchange: setC('signer') })),
+    trow('Jabatan', mkEl('input', { value: co.title || '', placeholder: 'Direktur', onchange: setC('title') })),
+    trow('Rekening', mkEl('input', { value: co.bank || '', placeholder: 'Bank · no. rekening · a.n.', onchange: setC('bank') })),
+    mkEl('div', { className: 'btnrow' },
+      co.logo ? mkEl('img', { src: co.logo, className: 'cologo' }) : null,
+      mkEl('button', { textContent: co.logo ? 'Ganti logo' : 'Pilih logo…', onclick: () => {
+        const inp = mkEl('input', { type: 'file', accept: 'image/*' });
+        inp.onchange = () => {
+          const f = inp.files[0];
+          if (!f) return;
+          const rd = new FileReader();
+          rd.onload = () => {
+            // perkecil logo agar file tetap ringan
+            const im = new Image();
+            im.onload = () => {
+              const k = Math.min(1, 360 / Math.max(im.width, im.height)), cv = document.createElement('canvas');
+              cv.width = Math.round(im.width * k); cv.height = Math.round(im.height * k);
+              cv.getContext('2d').drawImage(im, 0, 0, cv.width, cv.height);
+              const c = companyOf(); c.logo = cv.toDataURL('image/png'); saveCompany(c); renderKonsPane();
+            };
+            im.src = rd.result;
+          };
+          rd.readAsDataURL(f);
+        };
+        inp.click();
+      } }),
+      co.logo ? mkEl('button', { textContent: 'Hapus logo', onclick: () => { const c = companyOf(); delete c.logo; saveCompany(c); renderKonsPane(); } }) : null));
+  P.append(det);
+  P.append(trow('Nama klien', mkEl('input', { value: pp.client, placeholder: 'Bapak/Ibu ...', onchange: setP('client') })));
+  P.append(trow('Alamat klien', mkEl('input', { value: pp.clientAddr, onchange: setP('clientAddr') })));
+  P.append(trow('Paket ditawarkan', mkEl('select', { onchange: setP('pkg') }, ...Object.entries(C.PACKAGES).map(([k, v]) => mkEl('option', { value: k, textContent: v.label, selected: pp.pkg === k })))));
+  P.append(mkEl('div', { className: 'btnrow' },
+    mkEl('label', { className: 'small' }, mkEl('input', { type: 'checkbox', checked: pp.three, onchange: setP('three') }), ' Bandingkan 3 paket'),
+    mkEl('label', { className: 'small' }, mkEl('input', { type: 'checkbox', checked: pp.detail, onchange: setP('detail') }), ' Rincian RAB lengkap')));
+  P.append(trow('Berlaku (hari)', mkEl('input', { type: 'number', min: 1, value: pp.valid, onchange: setP('valid', (v) => Math.max(1, Math.round(+v) || 30)) })));
+  P.append(mkEl('div', { className: 'msec', textContent: 'Termin pembayaran (persen; keterangan)' }));
+  P.append(mkEl('textarea', { className: 'protext', rows: 4, value: pp.termin, onchange: setP('termin') }));
+  P.append(mkEl('div', { className: 'msec', textContent: 'Syarat & ketentuan (satu per baris)' }));
+  P.append(mkEl('textarea', { className: 'protext', rows: 4, value: pp.syarat, onchange: setP('syarat') }));
+  const tot = Object.fromEntries(Object.keys(C.PACKAGES).map((k) => [k, C.rekap(model, C.rabRows(model, { pkg: k })).bulat]));
+  if (tot.standar) P.append(mkEl('div', { className: 'small pkgsum' }, ...Object.entries(C.PACKAGES).map(([k, v]) => mkEl('span', { className: k === pp.pkg ? 'on' : '' }, `${v.label}: Rp ${(tot[k] / 1e6).toLocaleString('id-ID', { maximumFractionDigits: 1 })} jt`))));
+  P.append(mkEl('div', { className: 'btnrow' }, mkEl('button', { className: 'primary', textContent: 'Buat Proposal (PDF)', onclick: () => exportProposal() })));
+  P.append(mkEl('div', { className: 'muted small', textContent: 'Satu PDF berisi: sampul + gambar 3D (sudut pandang layar sekarang), surat penawaran, perbandingan paket, denah & tampak, RAB, jadwal & Kurva S, termin pembayaran, syarat, dan kolom tanda tangan.' }));
+}
+const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
+async function exportProposal(toFile = true) {
+  const pp = proposalOf(), co = companyOf(), pj = rabProject();
+  const pkg = C.PACKAGES[pp.pkg] ? pp.pkg : 'standar';
+  const rows = C.rabRows(model, { pkg });
+  if (!rows.length) return toast('Belum ada pekerjaan untuk ditawarkan. Gambar bangunan (dinding, ruang, kusen, atap) dulu.');
+  const rk = C.rekap(model, rows);
+  const rp = (v) => Math.round(v).toLocaleString('id-ID');
+  const now = new Date();
+  const date = now.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+  const validTo = new Date(now.getTime() + pp.valid * 864e5).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+  const no = `${String(now.getDate()).padStart(2, '0')}${String(now.getHours()).padStart(2, '0')}/PNW/${ROMAN[now.getMonth()]}/${now.getFullYear()}`;
+  const reno = C.renoActive(model);
+  const area = Object.entries(model.groups).filter(([k, g]) => g.room && (!reno || C.phaseOf(model, +k) !== 'demo')).reduce((a, [, g]) => a + g.room.area, 0);
+  const sc = C.schedule(rows, rabWeeks());
+  // gambar 3D dari sudut pandang layar sekarang
+  const savedSel = selection;
+  selection = new Set();
+  const hero = await exportPNG(1.5, 'url');
+  selection = savedSel;
+  const vis = makeVisible(model);
+  const plans = planSheets(vis);
+  const box = G.bboxOf(model, null, vis);
+  const elev = Object.values(model.groups).some((g) => g.wall) ? elevSheets(vis, box) : [];
+  refresh();
+  const pkTotals = Object.fromEntries(Object.keys(C.PACKAGES).map((k) => [k, C.rekap(model, C.rabRows(model, { pkg: k }))]));
+  const termin = String(pp.termin).split(/\n/).map((l) => l.trim()).filter(Boolean).map((l) => { const m2 = l.match(/^\s*([\d.,]+)\s*%?\s*[;:-]?\s*(.*)$/); return m2 ? { pct: parseFloat(m2[1].replace(',', '.')), label: m2[2] || '-' } : { pct: 0, label: l }; });
+  const tPct = termin.reduce((a, t) => a + t.pct, 0);
+  const syarat = String(pp.syarat).split(/\n/).map((l) => l.trim()).filter(Boolean);
+  const head = (t) => `<div class="ph"><div class="phl">${co.logo ? `<img src="${co.logo}">` : ''}<div><b>${escHtml(co.name || 'Penawaran Pekerjaan')}</b><span>${escHtml([co.addr, co.phone, co.email].filter(Boolean).join(' · '))}</span></div></div><h2>${t}</h2></div>`;
+  const specRows = Object.keys(C.PACKAGES.standar.spec).map((k) => `<tr><td>${k}</td>${Object.entries(C.PACKAGES).map(([pk, v]) => `<td class="${pk === pkg ? 'on' : ''}">${escHtml(v.spec[k])}</td>`).join('')}</tr>`).join('');
+  const sumRows = rk.cats.map((c, i) => `<tr><td class="c">${i + 1}</td><td>${escHtml(c.cat)}</td><td class="n">${rp(c.total)}</td></tr>`).join('');
+  let detail = '';
+  if (pp.detail) {
+    let cat = null, n = 1;
+    for (const r of rows) {
+      if (r.cat !== cat) { cat = r.cat; detail += `<tr class="cat"><td colspan="6">${escHtml(cat)}</td></tr>`; }
+      detail += `<tr><td class="c">${n++}</td><td>${escHtml(r.name)}</td><td class="n">${r.vol.toLocaleString('id-ID')}</td><td class="c">${escHtml(r.unit)}</td><td class="n">${rp(r.price)}</td><td class="n">${rp(r.total)}</td></tr>`;
+    }
+  }
+  const scope = reno ? (() => {
+    const dm = rows.filter((r) => r.cat === 'Pekerjaan Bongkaran').map((r) => r.name.toLowerCase());
+    return `<p>Lingkup: <b>renovasi</b> — bangunan lama dipertahankan; pekerjaan meliputi ${dm.length ? 'pembongkaran (' + escHtml(dm.slice(0, 4).join(', ')) + (dm.length > 4 ? ', dll.' : '') + ') dan ' : ''}pekerjaan baru sesuai gambar.</p>`;
+  })() : '';
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+    @page { size: A4 portrait; margin: 12mm 12mm 14mm; }
+    body { font-family: "Segoe UI", Arial, sans-serif; font-size: 9.6pt; color: #1b2430; margin: 0; }
+    .page { page-break-before: always; } h2 { font-size: 13pt; margin: 0; color: #1f4e8c; letter-spacing: .2mm; }
+    .ph { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 0.7mm solid #1f4e8c; padding-bottom: 2mm; margin-bottom: 5mm; }
+    .phl { display: flex; gap: 3mm; align-items: center; } .phl img { height: 12mm; } .phl b { display: block; font-size: 11pt; } .phl span { color: #556; font-size: 8pt; }
+    table { width: 100%; border-collapse: collapse; } th, td { border: 0.2mm solid #b8c0ca; padding: 1.3mm 1.8mm; vertical-align: top; }
+    th { background: #e8eef6; } .n { text-align: right; white-space: nowrap; } .c { text-align: center; } tr.cat td { background: #f3f6f9; font-weight: 700; }
+    tr.tot td { font-weight: 700; border-top: 0.5mm solid #1b2430; } tr.big td { font-size: 11pt; background: #fff6d8; }
+    .cover { height: 265mm; display: flex; flex-direction: column; }
+    .cover .top { display: flex; justify-content: space-between; align-items: center; } .cover .top img { height: 20mm; }
+    .cover .co b { font-size: 15pt; display: block; } .cover .co span { color: #556; font-size: 8.5pt; }
+    .cover h1 { font-size: 26pt; margin: 14mm 0 2mm; color: #1f4e8c; letter-spacing: .5mm; } .cover .sub { font-size: 13pt; color: #333; }
+    .cover .hero { margin: 8mm 0; flex: 1; border-radius: 3mm; background: #eef2f6 center / cover no-repeat; }
+    .cover .meta { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 3mm; } .cover .meta div { border-left: 1mm solid #1f4e8c; padding: 1mm 3mm; } .cover .meta span { display: block; color: #667; font-size: 8pt; } .cover .meta b { font-size: 10.5pt; }
+    .letter p { line-height: 1.55; margin: 0 0 3mm; } .price { font-size: 16pt; font-weight: 800; color: #1f4e8c; margin: 2mm 0 1mm; } .tb { font-style: italic; color: #445; }
+    .pk td.on, .pk th.on { background: #fff4cf; } .pk th.on { border-top: 1mm solid #e0a400; } .pk .tt td { font-weight: 800; font-size: 10.5pt; }
+    .sheet { position: relative; width: 186mm; height: 117.4mm; border: 0.3mm solid #889; margin: 0 0 4mm; overflow: hidden; }
+    .sheet .plan, .sheet .cell { position: absolute; inset: 0; } .sheet img, .sheet svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .sheet .cap { position: absolute; left: 2mm; bottom: 1.5mm; font-size: 2.8mm; font-weight: 700; background: #fffc; padding: 0 1mm; }
+    .elev { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 2mm; width: 186mm; height: 117.4mm; page-break-inside: avoid; } .elev .cell { position: relative; border: 0.25mm solid #aab; overflow: hidden; }
+    .elev .cell img, .elev .cell svg { position: absolute; inset: 0; width: 100%; height: 100%; } .elev .cell .cap { position: absolute; left: 1.5mm; bottom: 1mm; font-size: 2.3mm; font-weight: 700; } .sheet { page-break-inside: avoid; }
+    .plan .cut { stroke: #111; stroke-width: 5; stroke-linecap: square; } .plan .col { fill: #111; }
+    .plan .otag rect { fill: #fff; stroke: #7a3e9d; stroke-width: 2; } .plan .otag text { fill: #7a3e9d; font-size: 15px; font-weight: 700; }
+    .plan .secl line { stroke: #2b6cb0; stroke-width: 2; stroke-dasharray: 22 6 4 6; } .plan .secl circle { fill: #fff; stroke: #2b6cb0; stroke-width: 2.5; } .plan .secl text { fill: #2b6cb0; font-size: 18px; font-weight: 700; }
+    .ktab { position: absolute; right: 1mm; top: 1mm; background: #fff; font-size: 1.9mm; border: 0.2mm solid #555; padding: 1mm 1.4mm; } .ktab table { border-collapse: collapse; margin-top: .6mm; } .ktab td, .ktab th { border: 0.15mm solid #999; padding: .3mm 1mm; text-align: center; background: #fff; }
+    .plan .mep circle { fill: #fff; stroke: #1f5fa8; stroke-width: 2; } .plan .mep path { stroke: #1f5fa8; stroke-width: 2; } .plan .mep text { fill: #1f5fa8; font-size: 12px; font-weight: 700; }
+    .plan .leaf { stroke: #111; stroke-width: 3; } .plan .swing { stroke: #555; stroke-width: 1.5; fill: none; stroke-dasharray: 8 5; }
+    .plan .rn { font-size: 22px; font-weight: 700; fill: #1d2b3a; } .plan .ra { font-size: 19px; fill: #44515f; }
+    .plan .dim line, .dim line { stroke: #c0392b; stroke-width: 2; } .plan .dim text { fill: #c0392b; font-size: 22px; font-weight: 600; }
+    .lvl line { stroke: #2b6cb0; stroke-width: 1.5; stroke-dasharray: 10 6; } .lvl path { fill: #2b6cb0; } .lvl text { fill: #2b6cb0; font-size: 20px; font-weight: 700; } .lvl text.nm { font-size: 15px; font-weight: 400; }
+    ${PLAN_EXTRA_CSS} .rleg { font-size: 2.2mm; padding: 1mm 1.6mm; }
+    .sign { display: flex; justify-content: space-between; margin-top: 12mm; } .sign div { width: 70mm; text-align: center; } .sign .ln { margin-top: 24mm; border-top: 0.3mm solid #111; padding-top: 1mm; font-weight: 700; }
+    ol { margin: 0; padding-left: 5mm; } ol li { margin: 0 0 1.6mm; line-height: 1.45; } .note { color: #556; font-size: 8.4pt; margin-top: 3mm; }
+  </style></head><body>
+  <div class="cover">
+    <div class="top">${co.logo ? `<img src="${co.logo}">` : '<span></span>'}<div class="co" style="text-align:right"><b>${escHtml(co.name || '')}</b><span>${escHtml([co.addr, co.phone, co.email].filter(Boolean).join(' · '))}</span></div></div>
+    <h1>PROPOSAL PENAWARAN</h1><div class="sub">${escHtml(pj.name)}${pj.location !== '-' ? ' — ' + escHtml(pj.location) : ''}</div>
+    <div class="hero" style="background-image:url('${hero}')"></div>
+    <div class="meta"><div><span>Disiapkan untuk</span><b>${escHtml(pp.client || '-')}</b></div><div><span>Nomor</span><b>${no}</b></div><div><span>Tanggal</span><b>${date}</b></div></div>
+  </div>
+  <div class="page letter">${head('SURAT PENAWARAN')}
+    <p>Nomor: ${no}<br>Perihal: Penawaran harga pekerjaan ${escHtml(pj.name)}<br>Lampiran: gambar, RAB & jadwal</p>
+    <p>Kepada Yth.<br><b>${escHtml(pp.client || 'Bapak/Ibu Pemilik')}</b>${pp.clientAddr ? '<br>' + escHtml(pp.clientAddr) : ''}<br>di tempat</p>
+    <p>Dengan hormat,</p>
+    <p>Bersama surat ini kami mengajukan penawaran harga untuk pekerjaan <b>${escHtml(pj.name)}</b>${pj.location !== '-' ? ' di ' + escHtml(pj.location) : ''}${area ? ` dengan luas lantai ± ${area.toLocaleString('id-ID', { maximumFractionDigits: 1 })} m²` : ''}, paket <b>${C.PACKAGES[pkg].label}</b>, sebesar:</p>
+    ${scope}
+    <div class="price">Rp ${rp(rk.bulat)}</div><div class="tb">(${escHtml(rk.terbilang)})</div>
+    <p style="margin-top:4mm">Harga sudah termasuk bahan, upah, alat${rk.jasaPct ? `, jasa pelaksana ${rk.jasaPct}%` : ''}${rk.ppnPct ? ` dan PPN ${rk.ppnPct}%` : ''}. Waktu pelaksanaan <b>${sc.weeks} minggu</b> kalender sejak uang muka diterima. Penawaran ini berlaku sampai <b>${validTo}</b> (${pp.valid} hari).</p>
+    <p>Rincian gambar, spesifikasi, anggaran, jadwal, dan cara pembayaran kami lampirkan pada halaman berikut. Besar harapan kami dapat bekerja sama dengan Bapak/Ibu.</p>
+    <div class="sign"><div></div><div>Hormat kami,<br>${escHtml(co.name || '')}<div class="ln">${escHtml(co.signer || '(..............................)')}</div>${escHtml(co.title || '')}</div></div>
+  </div>
+  ${pp.three ? `<div class="page">${head('PILIHAN PAKET')}
+    <table class="pk"><tr><th>Uraian</th>${Object.entries(C.PACKAGES).map(([k, v]) => `<th class="${k === pkg ? 'on' : ''}">${v.label}${k === pkg ? ' ★' : ''}</th>`).join('')}</tr>${specRows}
+    <tr class="tt"><td>Harga total</td>${Object.keys(C.PACKAGES).map((k) => `<td class="n ${k === pkg ? 'on' : ''}">Rp ${rp(pkTotals[k].bulat)}</td>`).join('')}</tr>
+    ${area ? `<tr><td>Per m² lantai</td>${Object.keys(C.PACKAGES).map((k) => `<td class="n ${k === pkg ? 'on' : ''}">Rp ${rp(pkTotals[k].bulat / area)}</td>`).join('')}</tr>` : ''}</table>
+    <div class="note">Struktur, dinding, dan instalasi sama untuk semua paket; perbedaan ada pada bahan finishing. ★ = paket yang kami sarankan pada surat penawaran.</div></div>` : ''}
+  ${plans.length || elev.length ? `<div class="page">${head('GAMBAR')}
+    ${plans.map((pl) => `<div class="sheet"><div class="plan">${pl.body}</div><div class="cap">${escHtml(pl.title)} · luas ${escHtml(pl.area)}</div></div>`).join('')}
+    ${elev.map((e) => `<div class="elev">${e.grid}</div>`).join('')}</div>` : ''}
+  <div class="page">${head('RENCANA ANGGARAN BIAYA — PAKET ' + C.PACKAGES[pkg].label.toUpperCase())}
+    <table><tr><th>No</th><th>Uraian Pekerjaan</th><th>Jumlah (Rp)</th></tr>${sumRows}
+    <tr class="tot"><td colspan="2">Jumlah biaya pekerjaan</td><td class="n">${rp(rk.sub)}</td></tr>
+    ${rk.jasaPct ? `<tr><td colspan="2">Jasa pelaksana ${rk.jasaPct}%</td><td class="n">${rp(rk.jasa)}</td></tr>` : ''}
+    ${rk.ppnPct ? `<tr><td colspan="2">PPN ${rk.ppnPct}%</td><td class="n">${rp(rk.ppn)}</td></tr>` : ''}
+    <tr class="tot big"><td colspan="2">TOTAL PENAWARAN (dibulatkan)</td><td class="n">Rp ${rp(rk.bulat)}</td></tr></table>
+    <div class="tb" style="margin-top:2mm">Terbilang: ${escHtml(rk.terbilang)}</div>
+    ${detail ? `<h3 style="margin:6mm 0 2mm">Rincian</h3><table><tr><th>No</th><th>Jenis pekerjaan</th><th>Volume</th><th>Sat.</th><th>Harga satuan</th><th>Jumlah</th></tr>${detail}</table>` : ''}</div>
+  <div class="page">${head('JADWAL & PEMBAYARAN')}
+    <div style="margin-bottom:2mm"><b>Jadwal pelaksanaan ${sc.weeks} minggu</b> — batang = bobot mingguan, garis merah = kumulatif (Kurva S)</div>
+    ${kurvaSvg(sc, 720, 280, true)}
+    <table style="margin:3mm 0 6mm"><tr><th>No</th><th>Pekerjaan</th><th>Bobot</th><th>Minggu</th></tr>${sc.cats.map((c, i) => `<tr><td class="c">${i + 1}</td><td>${escHtml(c.cat)}</td><td class="n">${c.weight.toLocaleString('id-ID', { maximumFractionDigits: 1 })}%</td><td class="c">${c.w0 + 1} – ${c.w1}</td></tr>`).join('')}</table>
+    <b>Termin pembayaran</b>
+    <table style="margin-top:2mm"><tr><th>Termin</th><th>Keterangan</th><th>%</th><th>Jumlah (Rp)</th></tr>${termin.map((t, i) => `<tr><td class="c">${i + 1}</td><td>${escHtml(t.label)}</td><td class="n">${t.pct.toLocaleString('id-ID')}%</td><td class="n">${rp((rk.bulat * t.pct) / 100)}</td></tr>`).join('')}
+    <tr class="tot"><td colspan="2">Total</td><td class="n">${tPct.toLocaleString('id-ID')}%</td><td class="n">${rp((rk.bulat * tPct) / 100)}</td></tr></table>
+    ${co.bank ? `<div class="note">Pembayaran ke: <b>${escHtml(co.bank)}</b></div>` : ''}${Math.abs(tPct - 100) > 0.01 ? `<div class="note" style="color:#c0392b">Catatan: jumlah persen termin ${tPct}% (bukan 100%).</div>` : ''}</div>
+  <div class="page">${head('SYARAT & PERSETUJUAN')}
+    <ol>${syarat.map((t) => `<li>${escHtml(t)}</li>`).join('')}</ol>
+    <p style="margin-top:6mm">Dengan menandatangani di bawah ini, kedua pihak menyetujui penawaran paket <b>${C.PACKAGES[pkg].label}</b> senilai <b>Rp ${rp(rk.bulat)}</b> beserta seluruh lampirannya.</p>
+    <div class="sign"><div>Menyetujui,<br>Pemilik<div class="ln">${escHtml(pp.client || '(..............................)')}</div></div><div>${escHtml(pj.location !== '-' ? pj.location + ', ' : '')}${date}<br>${escHtml(co.name || 'Pelaksana')}<div class="ln">${escHtml(co.signer || '(..............................)')}</div>${escHtml(co.title || '')}</div></div>
+    <div class="note">Dibuat dengan SketchClone · ${no}</div></div>
+  </body></html>`;
+  if (!toFile) return { html, rk, pkTotals, termin };
+  const out = await window.api.savePdf(html, `${pj.name} - Proposal Penawaran.pdf`, { pageSize: 'A4', landscape: false, margins: true });
+  out && toast('Proposal PDF disimpan · paket ' + C.PACKAGES[pkg].label + ' Rp ' + rp(rk.bulat));
+  return { rk, pkTotals };
 }
 
 // ---- Daftar bahan (Excel .xlsx) ----
@@ -6468,6 +6936,8 @@ const handleMenu = async (cmd, arg) => {
     case 'exportBom': await exportBom(); break;
     case 'exportRab': await exportRab(); break;
     case 'exportRabPdf': await exportRabPdf(); break;
+    case 'proposal': showTray('kons'); await exportProposal(); break;
+    case 'structCheck': runStructCheck(); break;
     case 'kons': showTray('kons'); break;
     case 'exportDxf': {
       const base = filePath ? filePath.split(/[\\/]/).pop().replace(/\.skc$/, '') : 'model';
@@ -6789,7 +7259,7 @@ window.__sk = {
   setSelection: (ids) => { selection = new Set(ids); refresh(); updateInfo(); },
   type: (t) => { vcbText = t; tool.onVCB && tool.onVCB(vcbText); vcbText = ''; renderVCB(); },
   key: (k) => window.dispatchEvent(new KeyboardEvent('keydown', { key: k })),
-  undo, redo, loadModel, setShadows, solidOp, runScript, sketch, textures, setMat, getCurMat: () => curMat, pluginCommands, applyArray, getLastArray: () => lastArray, C, PR, renderProdPane, placeCabinet, prodCutList, prodNesting, buildNet, exportNet, exportCutPdf, exportPrint, getLastNet: () => lastNet, buildHouse, HOUSES, buildAllStructure, toggleStructView, elevSheets, sectionSheets, exportRabPdf, kurvaSvg, rabExtraSheets, placeStairTool, placeMepTool, setStairShape: (v) => (stairShape = v), exportRab, renderKonsPane, addLevel, curLevel, planSheets, roomSliceZ, loadOnlineLib, placeOnline, insertModelAsComponent, exportSelectionComponent, getOnlineLib: () => onlineLib, exportWebViewer, shareToPhone, viewerHtml, runAi, openAi, aiContext, openVersions, newFromTemplate, openKeys, saveKeys, keyTools, recordVideo, sky, exportDrawing, bomData, exportBom, exportDXF, intersectSel, roofSel, showGrips, gripState: () => gripState, fastIds: () => fastIds, openDeform, applyDeform, tessellateSel, mirrorLinked, splinePoints, subdivideSel, roundAllSel, mirrorSel, importReference, filletSel, fitTexture, texMapper, editTexture, exportPNG, serializeProject, applyProjectData, startPlace, LIBRARY, insertLibrary, getFont, textShapes, buildText3D, confirmText3D, getPlaceGen: () => placeGen, boxSelect, openCtx, zoomSelection, fmt, parseNums, eyePos, walkBy, turnView, importMesh, exportGLB, addScene, goScene, showTray, hideSelection, unhideAll, cmd: handleMenu, enterEdit, exitEdit, editGroup: () => editGroup, sunState, styleOf, setStyle, refresh,
+  undo, redo, loadModel, setShadows, solidOp, runScript, sketch, textures, setMat, getCurMat: () => curMat, pluginCommands, applyArray, getLastArray: () => lastArray, C, PR, S, markPhase, markAllExisting, setRenoView, slabFromSelection, beamsFromSelection, placeColumnTool, runStructCheck, applyStructFix, fixAllStruct, getLastCheck: () => lastCheck, exportProposal, companyOf, saveCompany, strukDim, renderProdPane, placeCabinet, prodCutList, prodNesting, buildNet, exportNet, exportCutPdf, exportPrint, getLastNet: () => lastNet, buildHouse, HOUSES, buildAllStructure, toggleStructView, elevSheets, sectionSheets, exportRabPdf, kurvaSvg, rabExtraSheets, placeStairTool, placeMepTool, setStairShape: (v) => (stairShape = v), exportRab, renderKonsPane, addLevel, curLevel, planSheets, roomSliceZ, loadOnlineLib, placeOnline, insertModelAsComponent, exportSelectionComponent, getOnlineLib: () => onlineLib, exportWebViewer, shareToPhone, viewerHtml, runAi, openAi, aiContext, openVersions, newFromTemplate, openKeys, saveKeys, keyTools, recordVideo, sky, exportDrawing, bomData, exportBom, exportDXF, intersectSel, roofSel, showGrips, gripState: () => gripState, fastIds: () => fastIds, openDeform, applyDeform, tessellateSel, mirrorLinked, splinePoints, subdivideSel, roundAllSel, mirrorSel, importReference, filletSel, fitTexture, texMapper, editTexture, exportPNG, serializeProject, applyProjectData, startPlace, LIBRARY, insertLibrary, getFont, textShapes, buildText3D, confirmText3D, getPlaceGen: () => placeGen, boxSelect, openCtx, zoomSelection, fmt, parseNums, eyePos, walkBy, turnView, importMesh, exportGLB, addScene, goScene, showTray, hideSelection, unhideAll, cmd: handleMenu, enterEdit, exitEdit, editGroup: () => editGroup, sunState, styleOf, setStyle, refresh,
   mouse(type, x, y, z, extra = {}) {
     const p = this.project(x, y, z);
     if (!p) return;

@@ -520,11 +520,12 @@ export function placeMep(m, kind, at, n, angle, opt = {}) {
 function mepPos(g) {
   return new THREE.Vector3(...g.mep.p).applyMatrix4(new THREE.Matrix4().fromArray(g.m));
 }
-export function mepRuns(model) {
+export function mepRuns(model, keep = null) {
   const pts = { listrik: [], air: [], kotor: [], septic: [], tandon: [], panel: [] };
-  for (const g of Object.values(model.groups)) {
+  for (const [gid, g] of Object.entries(model.groups)) {
     if (!g.mep || !MEP[g.mep.kind]) continue;
     const it = MEP[g.mep.kind], p = mepPos(g);
+    if (keep && !['panel', 'septic', 'tandon'].includes(g.mep.kind === 'panel' ? 'panel' : it.sys) && !keep(+gid)) continue; // renovasi: jalur titik baru saja
     if (g.mep.kind === 'panel') pts.panel.push(p);
     else if (it.sys === 'listrik') pts.listrik.push(p);
     if (it.sys === 'air' || it.sys === 'kotor') pts.air.push(p);
@@ -543,6 +544,163 @@ export function mepRuns(model) {
 
 // ---------- RAB ----------
 const ahspBy = Object.fromEntries(AHSP.map((a) => [a.code, a]));
+// ---------- Renovasi: fase eksisting / dibongkar / baru ----------
+export const PHASE_LABEL = { exist: 'Eksisting', demo: 'Dibongkar', new: 'Baru' };
+const META_KEYS = ['wall', 'opening', 'room', 'roof', 'stair', 'mep', 'slab', 'beam', 'column', 'furniture'];
+// Fase grup: milik sendiri; struktur ikut dindingnya; elemen bermeta yang belum ditandai = baru;
+// sub-grup polos ikut induknya.
+export function phaseOf(model, gid, depth = 0) {
+  if (gid == null || depth > 60) return 'new';
+  const g = model.groups[gid];
+  if (!g) return 'new';
+  if (g.phase) return g.phase;
+  if (g.struct && model.groups[g.struct.wall]) return phaseOf(model, g.struct.wall, depth + 1);
+  if (META_KEYS.some((k) => g[k])) return 'new';
+  return phaseOf(model, g.parent ?? null, depth + 1);
+}
+export const facePhase = (model, f) => phaseOf(model, f.group ?? null);
+export const renoActive = (model) => Object.values(model.groups || {}).some((g) => g.phase);
+// tandai grup beserta seluruh sub-grupnya
+export function setPhase(model, gids, phase) {
+  const all = new Set();
+  const walk = (g) => {
+    if (all.has(g)) return;
+    all.add(g);
+    for (const [k, c] of Object.entries(model.groups)) if ((c.parent ?? null) === g) walk(+k);
+  };
+  gids.forEach((g) => walk(+g));
+  for (const g of all) {
+    const gr = model.groups[g];
+    if (!gr) continue;
+    if (phase === 'new') delete gr.phase;
+    else gr.phase = phase;
+  }
+  // struktur dinding ikut
+  for (const sg of Object.values(model.groups)) if (sg.struct && all.has(sg.struct.wall)) delete sg.phase;
+  return all.size;
+}
+// Pekerjaan bongkaran (tidak ada di AHSP RAB_Bangunan): harga pasar perkiraan, bisa diubah di panel RAB.
+const demoIt = (code, name, unit, price) => ({ code, name, unit, price, mat: 0, lab: 0.85, eq: 0.15, group: 'Bongkaran', sub: 'Pekerjaan Bongkaran' });
+export const DEMO_ITEMS = Object.fromEntries([
+  demoIt('B.1', 'Bongkar pasangan dinding bata + plester', 'm²', 45000),
+  demoIt('B.2', 'Bongkar penutup & rangka atap', 'm²', 35000),
+  demoIt('B.3', 'Bongkar plafon', 'm²', 20000),
+  demoIt('B.4', 'Bongkar kusen + daun pintu/jendela', 'unit', 75000),
+  demoIt('B.5', 'Bongkar beton bertulang', 'm³', 750000),
+  demoIt('B.6', 'Bongkar lantai keramik', 'm²', 30000),
+  demoIt('B.7', 'Angkut & buang puing (volume gembur)', 'm³', 175000),
+  demoIt('B.8', 'Bongkar titik instalasi / sanitair', 'titik', 50000),
+  demoIt('B.9', 'Bobok dinding lama untuk bukaan baru + perapian', 'm²', 85000),
+].map((d) => [d.code, d]));
+
+// ---------- Elemen struktur: plat, balok, kolom (+ footplat) ----------
+const SLABC = '#cbc7bf', BEAMC = '#b9b6ae';
+const ccw = (pts) => (G.newellNormal(pts).z < 0 ? pts.slice().reverse() : pts);
+function prism(model, pts2, z, h, color, parent) {
+  const pts = ccw(pts2.map((p) => [p[0], p[1], z]));
+  const f = G.makeFace(model, pts, UP, color);
+  if (!f) return null;
+  f.group = parent;
+  model.faces.push(f);
+  G.pushPull(model, f.id, h);
+  return f.solid;
+}
+const polyArea2 = (P) => Math.abs(P.reduce((a, p, i) => { const q = P[(i + 1) % P.length]; return a + p[0] * q[1] - q[0] * p[1]; }, 0)) / 2;
+function groupFrom(model, start, name, parent) {
+  const ids = new Set(model.faces.filter((f) => f.id >= start).map((f) => f.id));
+  for (const f of model.faces) if (ids.has(f.id)) f.group = parent;
+  return G.makeGroup(model, ids, name, false, parent);
+}
+// Plat beton: outline 2D [[x,y]..], zTop = elevasi atas plat
+export function makeSlab(model, outline, zTop, t = 0.12, parent = null) {
+  const start = model.nextId;
+  if (prism(model, outline, zTop - t, t, SLABC, parent) == null) return null;
+  const gid = groupFrom(model, start, `Plat beton ${Math.round(t * 100)} cm`, parent);
+  const pts = outline.map((p) => [+p[0].toFixed(4), +p[1].toFixed(4)]);
+  model.groups[gid].slab = { t, z: +zTop.toFixed(4), area: +polyArea2(pts).toFixed(3), pts };
+  return gid;
+}
+// Balok: as a->b (2D), zTop = elevasi atas balok, lebar bw, tinggi total h
+export function makeBeam(model, a, b, zTop, bw = 0.15, h = 0.3, parent = null) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy);
+  if (L < 0.05) return null;
+  const nx = (-dy / L) * (bw / 2), ny = (dx / L) * (bw / 2);
+  const start = model.nextId;
+  prism(model, [[a[0] + nx, a[1] + ny], [a[0] - nx, a[1] - ny], [b[0] - nx, b[1] - ny], [b[0] + nx, b[1] + ny]], zTop - h, h, BEAMC, parent);
+  const gid = groupFrom(model, start, `Balok ${Math.round(bw * 100)}/${Math.round(h * 100)}`, parent);
+  model.groups[gid].beam = { b: bw, h, p1: [+a[0].toFixed(4), +a[1].toFixed(4)], p2: [+b[0].toFixed(4), +b[1].toFixed(4)], z: +zTop.toFixed(4), len: +L.toFixed(4) };
+  return gid;
+}
+// Kolom struktur b x b dari z0 setinggi H; foot = lebar footplat (0 = tanpa), dalam = kedalaman dasar footplat
+export function makeColumn(model, x, y, z0, H, b = 0.2, opt = {}, parent = null) {
+  const foot = opt.foot || 0, depth = opt.depth || 1.0, tf = 0.25;
+  const start = model.nextId;
+  const sq = (w) => [[x - w / 2, y - w / 2], [x + w / 2, y - w / 2], [x + w / 2, y + w / 2], [x - w / 2, y + w / 2]];
+  const zb = foot ? z0 - depth + tf : z0;
+  prism(model, sq(b), zb, z0 + H - zb, CONC, parent);
+  if (foot) prism(model, sq(foot), z0 - depth, tf, CONC, parent);
+  const gid = groupFrom(model, start, `Kolom ${Math.round(b * 100)}/${Math.round(b * 100)}${foot ? ' + footplat' : ''}`, parent);
+  model.groups[gid].column = { b, H: +H.toFixed(4), x: +x.toFixed(4), y: +y.toFixed(4), z: +z0.toFixed(4), foot, depth };
+  return gid;
+}
+// Bangun ulang elemen dengan ukuran baru (fase, tag, induk & nama-ruang dipertahankan)
+export function rebuildElem(model, gid, patch = {}) {
+  const g = model.groups[gid];
+  if (!g) return null;
+  const keep = { phase: g.phase, tag: g.tag, parent: g.parent ?? null };
+  let ng = null;
+  if (g.slab) {
+    const s = { ...g.slab, ...patch };
+    G.deleteIds(model, G.entitiesInTree(model, gid));
+    ng = makeSlab(model, s.pts, s.z, s.t, keep.parent);
+  } else if (g.beam) {
+    const s = { ...g.beam, ...patch };
+    G.deleteIds(model, G.entitiesInTree(model, gid));
+    ng = makeBeam(model, s.p1, s.p2, s.z, s.b, s.h, keep.parent);
+  } else if (g.column) {
+    const s = { ...g.column, ...patch };
+    G.deleteIds(model, G.entitiesInTree(model, gid));
+    ng = makeColumn(model, s.x, s.y, s.z, s.H, s.b, { foot: s.foot, depth: s.depth }, keep.parent);
+  }
+  if (ng != null) {
+    if (keep.phase) model.groups[ng].phase = keep.phase;
+    if (keep.tag != null) model.groups[ng].tag = keep.tag;
+  }
+  return ng;
+}
+// Tulangan elemen -> baris pembesian {el, kode, bar, desc, len}
+export function elemBars(kind, d) {
+  const out = [];
+  const add = (el, kode, bar, desc, len) => len > 0 && out.push({ el, kode, bar, desc, len });
+  if (kind === 'balok') {
+    const main = d.h >= 0.25 ? 'D13' : 'D10', n = d.h >= 0.4 ? 6 : 4;
+    const per = 2 * (d.b + d.h) - 0.16 + 0.1;
+    const tag = `Balok ${Math.round(d.b * 100)}/${Math.round(d.h * 100)}`;
+    add(tag, 'B', main, `Tulangan utama ${n}${main}`, n * (d.len + 0.4) * d.n);
+    add(tag, 'B', 'Ø8', `Sengkang Ø8-150 (${per.toFixed(2)} m/bh)`, (Math.floor(d.len / 0.15) + 1) * per * d.n);
+  } else if (kind === 'kolom') {
+    const main = d.b >= 0.2 ? 'D13' : 'D10';
+    const per = 4 * d.b - 0.16 + 0.1;
+    const tag = `Kolom struktur ${Math.round(d.b * 100)}/${Math.round(d.b * 100)}`;
+    add(tag, 'KS', main, `Tulangan utama 4${main}`, 4 * (d.H + 0.6) * d.n);
+    add(tag, 'KS', 'Ø8', `Sengkang Ø8-150 (${per.toFixed(2)} m/bh)`, (Math.floor(d.H / 0.15) + 1) * per * d.n);
+  } else if (kind === 'footplat') {
+    const nb = Math.ceil(d.B / 0.15) + 1;
+    add(`Footplat ${Math.round(d.B * 100)}×${Math.round(d.B * 100)}`, 'FP', 'D13', `Tulangan D13-150 dua arah (${nb}+${nb} btg)`, 2 * nb * (d.B + 0.2) * d.n);
+  } else if (kind === 'ring') {
+    const per = 2 * (0.15 + d.h) - 0.16 + 0.1;
+    const tag = `Ring balok 15/${Math.round(d.h * 100)}`;
+    add(tag, 'RB', 'D13', 'Tulangan utama 4D13', 4 * d.len * 1.05);
+    add(tag, 'RB', 'Ø8', `Sengkang Ø8-150 (${per.toFixed(2)} m/bh)`, (d.len / 0.15) * per);
+  }
+  return out.map((r) => ({ ...r, len: r.len * (r.bar === 'Ø8' ? 1.05 : 1.1) }));
+}
+const pip2 = (x, y, P) => G.pointInPoly2(new THREE.Vector2(x, y), P.map((p) => new THREE.Vector2(p[0], p[1])));
+export function slabAt(model, x, y, z, tol = 0.06) {
+  for (const g of Object.values(model.groups)) if (g.slab && Math.abs(g.slab.z - z) < tol && pip2(x, y, g.slab.pts)) return g.slab;
+  return null;
+}
+
 export const FLOOR_TYPES = { '7.4.1.1': 'Keramik 30x30', '7.4.1.2': 'Keramik 40x40', '9.1.1.1': 'Granit 60x60' };
 
 export function rabQuantities(model, opt = {}) {
@@ -556,7 +714,78 @@ export function rabQuantities(model, opt = {}) {
   const levels = levelsOf(model);
   const z0 = levels[0].z;
   const pond = pondasiOf(model, opt.pondasi);
+  const reno = renoActive(model);
+  const bars = [];
+  let puing = 0, elemConc = 0;
+  const conc = (v) => { add('6.3.1.3', v); elemConc += v; };
+  const gvol = (gid, filt = () => true) => {
+    const sids = new Set(model.faces.filter((f) => (f.group ?? null) === +gid && f.solid != null && filt(f)).map((f) => f.solid));
+    let v = 0;
+    for (const s2 of sids) v += solidVolume(model, s2);
+    return v;
+  };
   for (const [gid, g] of Object.entries(model.groups)) {
+    const ph = reno ? phaseOf(model, +gid) : 'new';
+    if (ph === 'demo') {
+      // pekerjaan bongkaran
+      if (g.wall) { const v = gvol(gid); add('B.1', v / g.wall.t); puing += v; }
+      else if (g.opening) add('B.4', 1);
+      else if (g.room) { add('B.6', g.room.area); add('B.3', g.room.area); puing += g.room.area * 0.05; }
+      else if (g.roof) {
+        let a = 0;
+        for (const f of model.faces) if ((f.group ?? null) === +gid && f.n[2] > 0.1) a += G.faceArea(f);
+        add('B.2', a); puing += a * 0.04;
+      } else if (g.stair || g.slab || g.beam || g.column) { const v = gvol(gid, (f) => !f.finish); add('B.5', v); puing += v; }
+      else if (g.mep) add('B.8', 1);
+      continue;
+    }
+    if (ph === 'exist') {
+      // perkuatan struktur pada dinding lama (hasil saran cek struktur)
+      const up = g.wall && g.wall.upgrade;
+      if (up) {
+        const nCols = columnPoints(g.wall).length, L = g.wall.len;
+        if (up.colB > 0.15) {
+          conc(nCols * up.colB * up.colB * g.wall.h);
+          add('6.5.1.1', nCols * 2 * up.colB * g.wall.h);
+          add('B.9', nCols * up.colB * g.wall.h, 'bobok untuk kolom struktur baru');
+          bars.push(...elemBars('kolom', { b: up.colB, H: g.wall.h, n: nCols }));
+        }
+        if (up.ringH > 0.2) {
+          conc(0.15 * up.ringH * L);
+          add('6.5.1.2', 2 * up.ringH * L);
+          add('B.9', up.ringH * L, 'bobok untuk ring balok baru');
+          bars.push(...elemBars('ring', { h: up.ringH, len: L }));
+        }
+      }
+      continue;
+    }
+    if (g.opening && reno && g.parent != null && phaseOf(model, g.parent) === 'exist') add('B.9', g.opening.w * g.opening.h, 'bukaan baru di dinding lama');
+    if (g.slab) {
+      const s = g.slab;
+      if (s.t <= 0.13) add('18.1.1.1', s.area * Math.max(1, s.t / 0.12));
+      else if (Math.abs(s.t - 0.15) < 0.02) add('18.1.1.2', s.area);
+      else add('18.1.1.2', s.area * (s.t / 0.15));
+    }
+    if (g.beam) {
+      const bm = g.beam;
+      const mid = [(bm.p1[0] + bm.p2[0]) / 2, (bm.p1[1] + bm.p2[1]) / 2];
+      const sl = slabAt(model, mid[0], mid[1], bm.z, 0.06) || slabAt(model, mid[0] + 0.2, mid[1], bm.z, 0.06) || slabAt(model, mid[0], mid[1] + 0.2, bm.z, 0.06);
+      const hb = Math.max(0.05, bm.h - (sl ? sl.t : 0));
+      conc(bm.b * hb * bm.len);
+      add('6.5.1.2', (2 * hb + bm.b) * bm.len);
+      bars.push(...elemBars('balok', { b: bm.b, h: bm.h, len: bm.len, n: 1 }));
+    }
+    if (g.column) {
+      const c = g.column, Hc = c.H + (c.foot ? c.depth - 0.25 : 0);
+      conc(c.b * c.b * Hc + (c.foot ? c.foot * c.foot * 0.25 : 0));
+      add('6.5.1.1', 4 * c.b * Hc);
+      bars.push(...elemBars('kolom', { b: c.b, H: Hc, n: 1 }));
+      if (c.foot) {
+        add('6.1.1.1', (c.foot + 0.3) ** 2 * c.depth);
+        add('6.9.1.1', c.foot * c.foot);
+        bars.push(...elemBars('footplat', { B: c.foot, n: 1 }));
+      }
+    }
     if (g.wall) {
       const sids = new Set(model.faces.filter((f) => (f.group ?? null) === +gid && f.solid != null).map((f) => f.solid));
       let vol = 0;
@@ -564,15 +793,24 @@ export function rabQuantities(model, opt = {}) {
       const area = vol / g.wall.t;
       const L = g.wall.len;
       const nCols = columnPoints(g.wall).length;
+      const cb = g.wall.colB || 0.15, rh = g.wall.ringH || 0.2;
       // pasangan bata = luas dinding - bidang kolom praktis - ring balok (plester tetap seluruh bidang)
-      add('7.1.1.1', Math.max(0, area - nCols * 0.15 * (g.wall.h - 0.2) - L * 0.2));
+      add('7.1.1.1', Math.max(0, area - nCols * cb * (g.wall.h - rh) - L * rh));
       add('7.2.1.1', area * 2);
       add('7.2.1.2', area * 2);
       // dinding keliling tertutup: satu sisi dalam + satu sisi luar; sekat: dua sisi dalam
       add('7.3.1.1', g.wall.closed ? area : area * 2);
       if (g.wall.closed) add('7.3.1.2', area);
-      add('6.8.1.2', L);
-      add('6.8.1.1', nCols * g.wall.h);
+      if (rh > 0.2 + 1e-6) {
+        conc(0.15 * rh * L);
+        add('6.5.1.2', 2 * rh * L);
+        bars.push(...elemBars('ring', { h: rh, len: L }));
+      } else add('6.8.1.2', L);
+      if (cb > 0.15 + 1e-6) {
+        conc(nCols * cb * cb * g.wall.h);
+        add('6.5.1.1', nCols * 2 * cb * g.wall.h);
+        bars.push(...elemBars('kolom', { b: cb, H: g.wall.h, n: nCols }));
+      } else add('6.8.1.1', nCols * g.wall.h);
       const pts = g.wall.pts;
       const zb = pts[0] ? pts[0][2] : 0;
       if (Math.abs(zb - z0) < 0.1) {
@@ -592,10 +830,11 @@ export function rabQuantities(model, opt = {}) {
       const r = g.room;
       add(r.floor || '7.4.1.2', r.area);
       add('7.7.1.1', r.area);
+      const lab = model.labels.find((l) => l.id === r.label);
       if (Math.abs(r.z - z0) < 0.1) {
         add('6.9.1.1', r.area);
         add('6.2.1.1', r.area * 0.1);
-      } else add('18.1.1.1', r.area);
+      } else if (!(lab && (slabAt(model, lab.p[0], lab.p[1], r.z, 0.15)))) add('18.1.1.1', r.area); // plat digambar terpisah -> tidak dihitung dua kali
     }
     if (g.stair) {
       const st = g.stair;
@@ -614,25 +853,60 @@ export function rabQuantities(model, opt = {}) {
       add('14.2.1.1', a);
     }
   }
-  const runs = mepRuns(model);
+  const runs = mepRuns(model, reno ? (g) => phaseOf(model, g) === 'new' : null);
   add('8.4.1.1', runs.kabel); // kabel NYM 2.5 mm²
   add('16.2.1.1', runs.kabel); // pipa conduit
   add('17.1.1.1', runs.air); // air bersih 1/2"
   add('17.2.1.2', runs.kotor); // air kotor 4"
+  if (puing > 0) add('B.7', puing * 1.3);
+  // besi elemen struktur (balok, kolom struktur, footplat, ring balok besar) dihitung terpisah per kg
+  let ulir = 0, polos = 0;
+  for (const b of bars) { const kg = b.len * BAR_KG[b.bar]; if (b.bar.startsWith('D')) ulir += kg; else polos += kg; }
+  add('6.4.1.2', ulir);
+  add('6.4.1.1', polos);
+  Object.defineProperty(q, '_bars', { value: bars, enumerable: false });
+  Object.defineProperty(q, '_elemConc', { value: elemConc, enumerable: false });
   return q;
 }
 
-const ORDER = ['Pekerjaan Tanah', 'Pekerjaan Pondasi', 'Pekerjaan Beton', 'Cor Dak', 'Konstruksi Baja', 'Pekerjaan Dinding', 'Pekerjaan Plester', 'Pekerjaan Kayu', 'Pekerjaan Lantai', 'Pekerjaan Plafon', 'Baja Ringan', 'Pekerjaan Atap', 'Pekerjaan Cat', 'Pekerjaan Listrik', 'Kabel Listrik', 'Pipa Instalasi', 'Panel Listrik', 'Lampu', 'Pekerjaan AC', 'Pekerjaan Ventilasi', 'Pekerjaan Plumbing', 'Pipa Air Bersih', 'Pipa Air Kotor', 'Sanitari', 'Pekerjaan Sanitasi', 'Pekerjaan Pompa', 'Pekerjaan Tandon'];
+const ORDER = ['Pekerjaan Bongkaran', 'Pekerjaan Tanah', 'Pekerjaan Pondasi', 'Pekerjaan Beton', 'Pekerjaan Besi', 'Pekerjaan Bekisting', 'Cor Dak', 'Konstruksi Baja', 'Pekerjaan Dinding', 'Pekerjaan Plester', 'Pekerjaan Kayu', 'Pekerjaan Lantai', 'Pekerjaan Plafon', 'Baja Ringan', 'Pekerjaan Atap', 'Pekerjaan Cat', 'Pekerjaan Listrik', 'Kabel Listrik', 'Pipa Instalasi', 'Panel Listrik', 'Lampu', 'Pekerjaan AC', 'Pekerjaan Ventilasi', 'Pekerjaan Plumbing', 'Pipa Air Bersih', 'Pipa Air Kotor', 'Sanitari', 'Pekerjaan Sanitasi', 'Pekerjaan Pompa', 'Pekerjaan Tandon'];
 
+// Paket penawaran: tukar item finishing & faktor harga per kategori.
+export const PACKAGES = {
+  hemat: {
+    label: 'Hemat', swap: { '7.4.1.2': '7.4.1.1', '9.1.1.1': '7.4.1.1', '7.5.2.1': '15.2.2.1', '7.5.1.1': '15.1.1.1' },
+    factor: { 'Pekerjaan Cat': 0.9, Sanitari: 0.85, Lampu: 0.9 },
+    spec: { Lantai: 'Keramik 30×30', Kusen: 'Kayu meranti 6/12', Pintu: 'Pintu flush kayu lapis', Atap: 'Genteng beton', Cat: 'Cat tembok ekonomis', Sanitair: 'Sanitair standar ekonomis' },
+  },
+  standar: {
+    label: 'Standar', swap: {}, factor: {},
+    spec: { Lantai: 'Sesuai pilihan per ruang (umumnya keramik 40×40)', Kusen: 'Kayu kamper 6/12', Pintu: 'Pintu panel kayu', Atap: 'Genteng beton', Cat: 'Cat tembok standar', Sanitair: 'Sanitair standar' },
+  },
+  premium: {
+    label: 'Premium', swap: { '7.4.1.1': '9.1.1.1', '7.4.1.2': '9.1.1.1', '7.5.2.1': '15.2.1.1', '7.6.1.1': '19.1.1.1' },
+    factor: { 'Pekerjaan Cat': 1.3, Sanitari: 1.6, Lampu: 1.3 },
+    spec: { Lantai: 'Granit tile 60×60', Kusen: 'Kayu kamper 6/12', Pintu: 'Pintu panel kayu solid 3 cm', Atap: 'Genteng keramik glazur', Cat: 'Cat tembok premium (tahan cuaca)', Sanitair: 'Sanitair premium' },
+  },
+};
 export function rabRows(model, opt = {}) {
-  const q = rabQuantities(model, opt);
+  const q0 = rabQuantities(model, opt);
+  const pk = opt.pkg && PACKAGES[opt.pkg];
+  let q = q0;
+  if (pk) {
+    q = {};
+    for (const it of Object.values(q0)) {
+      const code = pk.swap[it.code] || it.code;
+      q[code] ||= { code, vol: 0, notes: [] };
+      q[code].vol += it.vol;
+    }
+  }
   const prices = (model.rab && model.rab.prices) || {};
   const rows = [];
   for (const it of Object.values(q)) {
-    const src = it.code === 'sloof' ? { ...ahspBy['6.8.1.2'], name: 'Sloof beton 15/20 cm' } : ahspBy[it.code];
+    const src = it.code === 'sloof' ? { ...ahspBy['6.8.1.2'], name: 'Sloof beton 15/20 cm' } : ahspBy[it.code] || DEMO_ITEMS[it.code];
     if (!src) continue;
     const vol = Math.round(it.vol * 100) / 100;
-    const price = prices[it.code] ?? src.price;
+    const price = Math.round((prices[it.code] ?? src.price) * ((pk && pk.factor[src.sub]) || 1));
     const total = vol * price;
     rows.push({
       key: it.code, cat: src.sub, name: src.name, code: src.code, vol, unit: src.unit, price,
@@ -749,6 +1023,7 @@ export function materialTakeoff(model) {
     if (!k) continue;
     for (const [m, c] of Object.entries(k)) need[m] = (need[m] || 0) + c * it.vol;
   }
+  if (q._elemConc) need.besi = Math.max(0, (need.besi || 0) - 80 * q._elemConc); // besi elemen sudah di daftar pembesian
   const bb = bbs(model, q);
   if (bb.totalKg > 0) {
     need.besi = (need.besi || 0) + bb.totalKg;
@@ -767,6 +1042,7 @@ export function materialTakeoff(model) {
 // ---------- Jadwal & Kurva S ----------
 // Rentang tiap kategori pekerjaan sebagai pecahan durasi proyek (urutan pembangunan rumah umum).
 export const PHASES = {
+  'Pekerjaan Bongkaran': [0, 0.08], 'Pekerjaan Besi': [0.1, 0.5], 'Pekerjaan Bekisting': [0.1, 0.5],
   'Pekerjaan Tanah': [0, 0.1], 'Pekerjaan Pondasi': [0.05, 0.2], 'Pekerjaan Beton': [0.12, 0.5], 'Cor Dak': [0.3, 0.5],
   'Pekerjaan Dinding': [0.2, 0.55], 'Pekerjaan Kayu': [0.35, 0.75], 'Konstruksi Baja': [0.45, 0.7], 'Baja Ringan': [0.5, 0.65],
   'Pekerjaan Atap': [0.55, 0.72], 'Pekerjaan Plester': [0.45, 0.75], 'Pekerjaan Plafon': [0.68, 0.85], 'Pekerjaan Lantai': [0.72, 0.9],
@@ -829,7 +1105,7 @@ const CONC = '#a9abae', STONE = '#8d8377';
 export function buildStructure(model, wallGid, opt = {}) {
   const g = model.groups[wallGid];
   if (!g?.wall) return null;
-  const w = g.wall, b = 0.15, zb = w.pts[0][2], h = w.h;
+  const w = g.wall, b = w.colB || 0.15, zb = w.pts[0][2], h = w.h, rh = w.ringH || 0.2;
   // hapus struktur lama dinding ini
   for (const [k, sg] of Object.entries(model.groups)) if (sg.struct?.wall === +wallGid) G.deleteIds(model, G.entitiesInTree(model, +k));
   const start = model.nextId;
@@ -845,7 +1121,7 @@ export function buildStructure(model, wallGid, opt = {}) {
   });
   for (const { p, d } of cols) {
     const cm = { ...model, faces: [], nextId: model.nextId };
-    lbox(cm, 0, -b / 2, -b / 2, 0, b, b, h - 0.2, CONC);
+    lbox(cm, 0, -b / 2, -b / 2, 0, b, b, h - rh, CONC);
     G.applyMatrix(cm, new Set(cm.faces.map((f) => f.id)), new THREE.Matrix4().makeRotationZ(Math.atan2(d.y, d.x)).setPosition(p.x, p.y, zb));
     model.nextId = cm.nextId;
     model.faces.push(...cm.faces);
@@ -859,7 +1135,7 @@ export function buildStructure(model, wallGid, opt = {}) {
     model.faces.push(f);
     G.pushPull(model, f.id, hh);
   };
-  band(zb + h - 0.2, 0.2, CONC); // ring balok
+  band(zb + h - rh, rh, CONC); // ring balok
   const ground = opt.ground ?? true;
   let pondVol = 0;
   if (ground) {
@@ -884,7 +1160,7 @@ export function buildStructure(model, wallGid, opt = {}) {
   const ids = new Set(model.faces.filter((f) => f.id >= start).map((f) => f.id));
   for (const f of model.faces) if (ids.has(f.id)) f.group = null;
   const sg = G.makeGroup(model, ids, 'Struktur ' + (g.name || 'Dinding'), false, null);
-  model.groups[sg].struct = { colPts: cols.map(({ p, d }) => [+p.x.toFixed(4), +p.y.toFixed(4), +Math.atan2(d.y, d.x).toFixed(4)]), z: zb, wall: +wallGid, cols: cols.length, colH: +(h - 0.2).toFixed(3), ring: w.len, sloof: ground ? w.len : 0, pondasi: +pondVol.toFixed(3) };
+  model.groups[sg].struct = { colPts: cols.map(({ p, d }) => [+p.x.toFixed(4), +p.y.toFixed(4), +Math.atan2(d.y, d.x).toFixed(4)]), z: zb, wall: +wallGid, cols: cols.length, colB: b, ringH: rh, colH: +(h - rh).toFixed(3), ring: w.len, sloof: ground ? w.len : 0, pondasi: +pondVol.toFixed(3) };
   if (opt.tag != null) model.groups[sg].tag = opt.tag;
   return sg;
 }
@@ -910,7 +1186,8 @@ export function bbs(model, q = null) {
   add('Sloof 15/20', 'S1', 'Ø6', 'Sengkang Ø6-150 (0,64 m/bh)', (sloof / 0.15) * 0.64, 0.05);
   add('Plat lantai 12 cm', 'PL', 'D10', 'Tulangan bawah D10-150 dua arah', dak * 13.33, 0.1);
   add('Plat lantai 12 cm', 'PL', 'Ø8', 'Tulangan atas Ø8-200 dua arah', dak * 10, 0.1);
-  add('Tangga beton', 'TG', 'D10', 'Tulangan pelat tangga (±80 kg/m³)', (v('6.3.1.3') * 80) / BAR_KG.D10, 0);
+  add('Tangga beton', 'TG', 'D10', 'Tulangan pelat tangga (±80 kg/m³)', ((v('6.3.1.3') - (q._elemConc || 0)) * 80) / BAR_KG.D10, 0);
+  for (const b of q._bars || []) add(b.el, b.kode, b.bar, b.desc, b.len, 0);
   const sum = {};
   for (const r of rows) {
     sum[r.bar] ||= { bar: r.bar, len: 0, kg: 0 };
