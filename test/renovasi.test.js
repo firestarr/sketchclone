@@ -112,3 +112,9 @@ const sK = m3.groups[stK].stair;
 ok(Math.abs(Math.min(...sK.fp.map((p) => p[1])) - 7.15) < 1e-3 && Math.abs(Math.max(...sK.fp.map((p) => p[1])) - 8.85) < 1e-3, 'jejak tangga U kiri y 7,15–8,85');
 ok(sK.axes.length === 2 && sK.axes[1][0][1] > sK.axes[0][0][1] && sK.landingFp.length === 4, 'sumbu lengan atas di belakang lengan bawah + bordes');
 ok(m3.faces.filter((f) => G.entitiesInTree(m3, stK).has(f.id)).every((f) => Number.isFinite(f.n[2])), 'normal tangga cermin valid');
+// ---- waterproofing plat dak terbuka ----
+const wp = Object.fromEntries(C.rabRows(m).map((r) => [r.code, r]))['7.9.2.1'];
+ok(wp && wp.vol > 42 && wp.vol < 42 + 0.3 * 26 + 0.5, 'waterproofing dak baru (terbuka ke langit): ' + wp?.vol);
+const cov = C.makeSlab(m3, [[0, 0], [4, 0], [4, 4], [0, 4]], 3, 0.12);
+C.makeSlab(m3, [[0, 0], [4, 0], [4, 2], [0, 2]], 6, 0.12);
+ok(Math.abs(C.slabExposure(m3, m3.groups[cov].slab) - 0.5) < 0.1, 'plat setengah tertutup plat di atasnya: ' + C.slabExposure(m3, m3.groups[cov].slab).toFixed(2));

@@ -713,6 +713,28 @@ export function slabAt(model, x, y, z, tol = 0.06) {
   return null;
 }
 
+// Bagian plat (0..1) yang tidak tertutup plat lebih tinggi atau atap (atap yang dibongkar diabaikan).
+export function slabExposure(model, s) {
+  const xs = s.pts.map((p) => p[0]), ys = s.pts.map((p) => p[1]);
+  const covers = [];
+  for (const [k, o] of Object.entries(model.groups)) {
+    if (phaseOf(model, +k) === 'demo') continue;
+    if (o.slab && o.slab !== s && o.slab.z > s.z + 0.3) covers.push((x, y) => pip2(x, y, o.slab.pts));
+    if (o.roof) {
+      const tree = G.entitiesInTree(model, +k);
+      for (const f of model.faces) if (tree.has(f.id) && f.n[2] > 0.1 && Math.max(...f.pts.map((p) => p[2])) > s.z + 0.3) covers.push((x, y) => pip2(x, y, f.pts));
+    }
+  }
+  let n = 0, open = 0;
+  const st = Math.max(0.25, Math.sqrt(s.area) / 12);
+  for (let x = Math.min(...xs) + st / 2; x < Math.max(...xs); x += st) for (let y = Math.min(...ys) + st / 2; y < Math.max(...ys); y += st) {
+    if (!pip2(x, y, s.pts)) continue;
+    n++;
+    if (!covers.some((c) => c(x, y))) open++;
+  }
+  return n ? open / n : 0;
+}
+
 export const FLOOR_TYPES = { '7.4.1.1': 'Keramik 30x30', '7.4.1.2': 'Keramik 40x40', '9.1.1.1': 'Granit 60x60' };
 
 export function rabQuantities(model, opt = {}) {
@@ -777,6 +799,12 @@ export function rabQuantities(model, opt = {}) {
       if (s.t <= 0.13) add('18.1.1.1', s.area * Math.max(1, s.t / 0.12));
       else if (Math.abs(s.t - 0.15) < 0.02) add('18.1.1.2', s.area);
       else add('18.1.1.2', s.area * (s.t / 0.15));
+      // plat dak terbuka ke langit -> waterproofing (luas terbuka + naik 30 cm ke dinding tepi)
+      const ex = slabExposure(model, s);
+      if (ex > 0.02) {
+        const per = s.pts.reduce((a, p, i) => { const q = s.pts[(i + 1) % s.pts.length]; return a + Math.hypot(q[0] - p[0], q[1] - p[1]); }, 0);
+        add('7.9.2.1', ex * (s.area + 0.3 * per));
+      }
     }
     if (g.beam) {
       const bm = g.beam;
@@ -881,7 +909,7 @@ export function rabQuantities(model, opt = {}) {
   return q;
 }
 
-const ORDER = ['Pekerjaan Bongkaran', 'Pekerjaan Tanah', 'Pekerjaan Pondasi', 'Pekerjaan Beton', 'Pekerjaan Besi', 'Pekerjaan Bekisting', 'Cor Dak', 'Konstruksi Baja', 'Pekerjaan Dinding', 'Pekerjaan Plester', 'Pekerjaan Kayu', 'Pekerjaan Lantai', 'Pekerjaan Plafon', 'Baja Ringan', 'Pekerjaan Atap', 'Pekerjaan Cat', 'Pekerjaan Listrik', 'Kabel Listrik', 'Pipa Instalasi', 'Panel Listrik', 'Lampu', 'Pekerjaan AC', 'Pekerjaan Ventilasi', 'Pekerjaan Plumbing', 'Pipa Air Bersih', 'Pipa Air Kotor', 'Sanitari', 'Pekerjaan Sanitasi', 'Pekerjaan Pompa', 'Pekerjaan Tandon'];
+const ORDER = ['Pekerjaan Bongkaran', 'Pekerjaan Tanah', 'Pekerjaan Pondasi', 'Pekerjaan Beton', 'Pekerjaan Besi', 'Pekerjaan Bekisting', 'Cor Dak', 'Konstruksi Baja', 'Pekerjaan Dinding', 'Pekerjaan Plester', 'Pekerjaan Kayu', 'Pekerjaan Lantai', 'Pekerjaan Waterproofing', 'Pekerjaan Plafon', 'Baja Ringan', 'Pekerjaan Atap', 'Pekerjaan Cat', 'Pekerjaan Listrik', 'Kabel Listrik', 'Pipa Instalasi', 'Panel Listrik', 'Lampu', 'Pekerjaan AC', 'Pekerjaan Ventilasi', 'Pekerjaan Plumbing', 'Pipa Air Bersih', 'Pipa Air Kotor', 'Sanitari', 'Pekerjaan Sanitasi', 'Pekerjaan Pompa', 'Pekerjaan Tandon'];
 
 // Paket penawaran: tukar item finishing & faktor harga per kategori.
 export const PACKAGES = {
