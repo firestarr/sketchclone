@@ -396,7 +396,7 @@ API \`sketch\` (semua fungsi pembuat benda mengembalikan id solid, kecuali diseb
 - door(faceId, point, w=0.9, h=2.1) / window(faceId, point, w=1.2, h=1.2, sill=0.9) — kusen pintu/jendela yang otomatis melubangi dinding (contoh: const f = sketch.wallFaceAt(2, -0.075, 1); sketch.door(f.id, f.point))
 - room(x, y, name) — ruang di titik dalam dinding tertutup (lantai + label nama & luas m², masuk RAB)
 - mep(kind, x, y, z, wallNormal=null, angleDeg=0) — utilitas: lampu (plafon), saklar, stopkontak, ac, exhaust, panel (dinding; beri wallNormal mis. [0,1,0] = menghadap +Y), kloset, wastafel, bakmandi, kran, floordrain, septictank, tandon, pompa; masuk RAB beserta perkiraan kabel & pipa
-- stairs(x, y, angleDeg=0, w=0.9, shape='lurus'|'L'|'U') — tangga beton + reling dari lantai aktif ke lantai di atasnya (naik ke arah +Y diputar angleDeg); lantai ruang atas otomatis dilubangi
+- stairs(x, y, angleDeg=0, w=0.9, shape='lurus'|'L'|'Lkiri'|'U'|'Ukiri', tread=0.28, riser=0.175) — tangga beton + reling dari lantai aktif ke lantai di atasnya (naik ke arah +Y diputar angleDeg); lantai ruang atas otomatis dilubangi
 - pondasi({top, bot, h, w, d}) — ukuran pondasi batu kali & galian untuk RAB
 - slab([[x,y],...], zTop, t=0.12) — plat beton (outline 2D, elevasi atas plat). beam([x,y],[x,y], zTop, b=0.15, h=0.3) — balok. column(x, y, b=0.2, H?, footplat?) — kolom struktur di lantai aktif (lantai dasar otomatis berfootplat)
 - Renovasi: existingAll() menandai seluruh model sekarang sebagai bangunan lama; phase(gids, 'exist'|'demo'|'new') menandai grup; yang digambar sesudahnya = pekerjaan baru. RAB hanya menghitung baru + bongkaran

@@ -103,3 +103,12 @@ const r2 = C.rabRows(m2);
 ok(!C.renoActive(m2) && r2.some((r) => r.code === '6.6.1.1') && !r2.some((r) => r.cat === 'Pekerjaan Bongkaran'), 'model tanpa fase dihitung penuh');
 const k2 = S.structCheck(m2);
 ok(k2.n.err === 0, 'rumah 1 lantai tanpa plat: tidak ada galat');
+// ---- tangga U balik kiri (flip) & data denah ----
+const m3 = G.normalizeModel({ faces: [], lines: [], nextId: 1 });
+const spK = C.stairSpec(3.12, { w: 0.8, shape: 'Ukiri', tread: 0.25, riser: 0.195 });
+ok(spK.shape === 'U' && spK.flip && spK.n === 16, 'Ukiri -> U dicerminkan, 16 anak tangga');
+const stK = C.placeStair(m3, new THREE.Vector3(3.1, 7.55, 0.2), -Math.PI / 2, spK).gid;
+const sK = m3.groups[stK].stair;
+ok(Math.abs(Math.min(...sK.fp.map((p) => p[1])) - 7.15) < 1e-3 && Math.abs(Math.max(...sK.fp.map((p) => p[1])) - 8.85) < 1e-3, 'jejak tangga U kiri y 7,15–8,85');
+ok(sK.axes.length === 2 && sK.axes[1][0][1] > sK.axes[0][0][1] && sK.landingFp.length === 4, 'sumbu lengan atas di belakang lengan bawah + bordes');
+ok(m3.faces.filter((f) => G.entitiesInTree(m3, stK).has(f.id)).every((f) => Number.isFinite(f.n[2])), 'normal tangga cermin valid');

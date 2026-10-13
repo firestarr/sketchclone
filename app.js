@@ -4856,9 +4856,9 @@ const sketch = {
     return i;
   },
   rab() { return C.rabRows(model); },
-  stairs(x, y, angleDeg = 0, w = 0.9, shape = 'lurus') {
+  stairs(x, y, angleDeg = 0, w = 0.9, shape = 'lurus', tread, riser) {
     const z = curLevel().z;
-    const r = C.placeStair(model, new THREE.Vector3(x, y, z), (angleDeg * Math.PI) / 180, C.stairSpec(nextLevelHeight(), { w, shape }), editGroup);
+    const r = C.placeStair(model, new THREE.Vector3(x, y, z), (angleDeg * Math.PI) / 180, C.stairSpec(nextLevelHeight(), { w, shape, tread, riser }), editGroup);
     levelTag(r.gid);
     C.cutStairVoid(model, r.gid);
     return r.gid;
@@ -5855,7 +5855,8 @@ async function exportDrawing() {
   return html.length;
 }
 
-const PLAN_EXTRA_CSS = `.plan .cut-ex { stroke: #8f979f; } .plan .cut-dm { stroke: #d63c2a; stroke-dasharray: 10 7; stroke-width: 4; }
+const PLAN_EXTRA_CSS = `.plan .stair { fill: none; stroke: #222; stroke-width: 2; } .plan .tread { stroke: #222; stroke-width: 1.3; } .plan .sarrow { fill: none; stroke: #c2410c; stroke-width: 2; } .plan .sfoot { fill: #c2410c; } .plan .stag { font: 600 15px 'Segoe UI', sans-serif; fill: #c2410c; } .plan .svoid { fill: none; stroke: #555; stroke-width: 1.6; stroke-dasharray: 9 6; }
+.plan .cut-ex { stroke: #8f979f; } .plan .cut-dm { stroke: #d63c2a; stroke-dasharray: 10 7; stroke-width: 4; }
     .plan .beam { stroke: #5b6470; stroke-width: 2.5; stroke-dasharray: 16 8; } .plan .btag { fill: #5b6470; font-size: 14px; font-weight: 700; }
     .rleg { position: absolute; left: 2mm; top: 2mm; background: #fff; border: 0.3mm solid #555; padding: 1.5mm 2.5mm; font-size: 2.8mm; display: flex; gap: 3mm; align-items: center; }
     .rleg i { display: inline-block; width: 7mm; height: 1.4mm; margin-right: 1.2mm; vertical-align: middle; } .rleg .ex { background: #8f979f; } .rleg .nw { background: #111; } .rleg .dm { background: repeating-linear-gradient(90deg, #d63c2a 0 2mm, transparent 2mm 3.2mm); }`;
@@ -5952,6 +5953,38 @@ function planSheets(vis) {
       if (g.beam && g.beam.z > lv.z + 0.5 && g.beam.z <= lv.z + lv.h + 0.06) {
         const bm = g.beam, [x1, y1] = sp(bm.p1[0], bm.p1[1], cutZ), [x2, y2] = sp(bm.p2[0], bm.p2[1], cutZ);
         extra += `<line class="beam" x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"/><text class="btag" x="${((x1 + x2) / 2).toFixed(1)}" y="${((y1 + y2) / 2 - 8).toFixed(1)}" text-anchor="middle">B ${Math.round(bm.b * 100)}/${Math.round(bm.h * 100)}</text>`;
+      }
+    }
+    // tangga: anak tangga + panah NAIK; di lantai atasnya garis putus-putus (void)
+    for (const [sgid, g] of Object.entries(model.groups)) {
+      const st = g.stair;
+      if (!st?.fp || !vis({ group: +sgid })) continue;
+      const poly = (P, cls) => `<polygon class="${cls}" points="${P.map(([x, y]) => sp(x, y, cutZ).map((v) => v.toFixed(1)).join(',')).join(' ')}"/>`;
+      if (Math.abs(st.z - lv.z) < 0.1) {
+        extra += poly(st.fp, 'stair');
+        const path = [];
+        for (const [a, b, k] of st.axes || []) {
+          const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1, nx = -dy / L, ny = dx / L, hw = st.w / 2;
+          for (let i = 1; i < k; i++) {
+            const cx = a[0] + (dx * i) / k, cy = a[1] + (dy * i) / k;
+            const [x1, y1] = sp(cx + nx * hw, cy + ny * hw, cutZ), [x2, y2] = sp(cx - nx * hw, cy - ny * hw, cutZ);
+            extra += `<line class="tread" x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"/>`;
+          }
+          path.push(sp(a[0], a[1], cutZ), sp(b[0], b[1], cutZ));
+        }
+        if (st.landingFp) extra += poly(st.landingFp, 'stair');
+        if (path.length) {
+          const [ex, ey] = path[path.length - 1], [px0, py0] = path[path.length - 2];
+          const ang = Math.atan2(ey - py0, ex - px0), ah = 14;
+          extra += `<polyline class="sarrow" points="${path.map((q) => q.map((v) => v.toFixed(1)).join(',')).join(' ')}"/><circle class="sfoot" cx="${path[0][0].toFixed(1)}" cy="${path[0][1].toFixed(1)}" r="5"/>`
+            + `<path class="sarrow" d="M${(ex - ah * Math.cos(ang - 0.45)).toFixed(1)} ${(ey - ah * Math.sin(ang - 0.45)).toFixed(1)}L${ex.toFixed(1)} ${ey.toFixed(1)}L${(ex - ah * Math.cos(ang + 0.45)).toFixed(1)} ${(ey - ah * Math.sin(ang + 0.45)).toFixed(1)}"/>`
+            + `<text class="stag" x="${(path[0][0] - 12).toFixed(1)}" y="${(path[0][1] + 5).toFixed(1)}" text-anchor="end">NAIK</text>`;
+        }
+      } else if (Math.abs(st.z + st.H - lv.z) < 0.1) {
+        extra += poly(st.fp, 'svoid');
+        const c = st.fp.reduce((a, p) => [a[0] + p[0] / st.fp.length, a[1] + p[1] / st.fp.length], [0, 0]);
+        const [vx, vy] = sp(c[0], c[1], cutZ);
+        extra += `<text class="stag" x="${vx.toFixed(1)}" y="${vy.toFixed(1)}" text-anchor="middle">VOID TANGGA</text>`;
       }
     }
     // kode kusen di dekat bukaan

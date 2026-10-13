@@ -355,8 +355,9 @@ export function pondasiOf(model, extra) {
 
 // ---------- tangga beton lurus ----------
 export function stairSpec(H, opt = {}) {
+  if (/kiri$/.test(opt.shape || '')) opt = { ...opt, shape: opt.shape.replace(/kiri$/, ''), flip: true };
   const n = Math.max(2, Math.round(H / (opt.riser || 0.175)));
-  return { H, n, R: H / n, T: opt.tread || 0.28, w: opt.w || 0.9, waist: opt.waist || 0.12, shape: opt.shape || 'lurus' };
+  return { H, n, R: H / n, T: opt.tread || 0.28, w: opt.w || 0.9, waist: opt.waist || 0.12, shape: opt.shape || 'lurus', flip: !!opt.flip };
 }
 // Bangun tangga di koordinat lokal (naik ke +Y, lebar sepanjang X, kaki di y=0), lalu M.
 export function buildStair(m, sp, M) {
@@ -383,7 +384,7 @@ export function buildStair(m, sp, M) {
   if (M) G.applyMatrix(m, ids, M);
   return { ids, conc, run };
 }
-export const STAIR_SHAPES = { lurus: 'Lurus', L: 'Bentuk L (bordes)', U: 'Bentuk U (bordes)' };
+export const STAIR_SHAPES = { lurus: 'Lurus', L: 'Bentuk L, belok kanan', Lkiri: 'Bentuk L, belok kiri', U: 'Bentuk U, balik kanan', Ukiri: 'Bentuk U, balik kiri' };
 // Tangga lurus / L / U. Lokal: naik ke +Y, lebar sepanjang X, kaki di (0,0,0); L berbelok ke kanan (+X), U berbalik di sebelah kanan.
 export function buildStairShape(m, sp, M) {
   const shape = sp.shape || 'lurus';
@@ -395,7 +396,7 @@ export function buildStairShape(m, sp, M) {
     take(r);
     const outline = [[-w / 2, 0], [w / 2, 0], [w / 2, r.run], [-w / 2, r.run]];
     G.applyMatrix(m, ids, M);
-    return { ids, outline, flights: [[r.run, sp.H]], landing: 0 };
+    return { ids, outline, flights: [[r.run, sp.H]], landing: 0, axes: [[[0, 0], [0, r.run], sp.n]] };
   }
   const n1 = Math.floor(sp.n / 2), n2 = sp.n - n1;
   const H1 = n1 * R, run1 = n1 * T, run2 = n2 * T;
@@ -417,10 +418,17 @@ export function buildStairShape(m, sp, M) {
   const outline = shape === 'L'
     ? [[-w / 2, 0], [w / 2, 0], [w / 2, run1], [w / 2 + run2, run1], [w / 2 + run2, run1 + w], [-w / 2, run1 + w]]
     : [[-w / 2, Math.min(0, run1 - run2)], [lx1, Math.min(0, run1 - run2)], [lx1, run1 + w], [-w / 2, run1 + w]];
-  return { ids, outline, flights: [[run1, H1], [run2, n2 * R]], landing: (lx1 + w / 2) * w };
+  // sumbu tiap lengan (kaki -> puncak) dan bordes, koordinat lokal
+  const axes = shape === 'L'
+    ? [[[0, 0], [0, run1], n1], [[w / 2, run1 + w / 2], [w / 2 + run2, run1 + w / 2], n2]]
+    : [[[0, 0], [0, run1], n1], [[w + gap, run1], [w + gap, run1 - run2], n2]];
+  const landingPts = shape === 'L' ? [[-w / 2, run1], [w / 2, run1], [w / 2, run1 + w], [-w / 2, run1 + w]] : [[-w / 2, run1], [lx1, run1], [lx1, run1 + w], [-w / 2, run1 + w]];
+  return { ids, outline, flights: [[run1, H1], [run2, n2 * R]], landing: (lx1 + w / 2) * w, axes, landingPts };
 }
 export function placeStair(m, at, angle, sp, parent = null) {
+  // flip: cermin lokal -> L/U berbelok ke kiri
   const M = new THREE.Matrix4().makeRotationZ(angle).setPosition(at);
+  if (sp.flip) M.multiply(new THREE.Matrix4().makeScale(-1, 1, 1));
   const r = buildStairShape(m, sp, M);
   for (const f of m.faces) if (r.ids.has(f.id)) f.group = parent;
   const shape = sp.shape || 'lurus';
@@ -428,10 +436,14 @@ export function placeStair(m, at, angle, sp, parent = null) {
   const fp = r.outline.map(([x, y]) => new THREE.Vector3(x, y, 0).applyMatrix4(M));
   const area = Math.abs(r.outline.reduce((a, p, i) => { const q = r.outline[(i + 1) % r.outline.length]; return a + p[0] * q[1] - q[0] * p[1]; }, 0)) / 2;
   m.groups[gid].stair = {
-    shape, n: sp.n, R: +sp.R.toFixed(4), T: sp.T, w: sp.w, H: sp.H, run: +r.flights.reduce((a, f) => a + f[0], 0).toFixed(4),
+    shape, flip: sp.flip || undefined, n: sp.n, R: +sp.R.toFixed(4), T: sp.T, w: sp.w, H: sp.H, run: +r.flights.reduce((a, f) => a + f[0], 0).toFixed(4),
     rail: +r.flights.reduce((a, f) => a + Math.hypot(f[0], f[1]), 0).toFixed(3), landing: +r.landing.toFixed(3), area: +area.toFixed(4),
     fp: fp.map((v) => [+v.x.toFixed(4), +v.y.toFixed(4)]), z: at.z,
   };
+  // untuk denah: sumbu lengan (dunia) & bordes
+  const W2 = ([x, y]) => { const v = new THREE.Vector3(x, y, 0).applyMatrix4(M); return [+v.x.toFixed(4), +v.y.toFixed(4)]; };
+  m.groups[gid].stair.axes = (r.axes || []).map(([a, b, k]) => [W2(a), W2(b), k]);
+  if (r.landingPts) m.groups[gid].stair.landingFp = r.landingPts.map(W2);
   return { gid, ids: r.ids };
 }
 // Lubangi lantai ruang di atas tangga (bukaan tangga) dan kurangi luasnya.
