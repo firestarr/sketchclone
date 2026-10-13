@@ -5912,6 +5912,7 @@ function planSheets(vis) {
     const renoLegend = renoOn ? `<div class="rleg"><b>RENOVASI</b><span><i class="ex"></i>Eksisting</span><span><i class="dm"></i>Dibongkar</span><span><i class="nw"></i>Baru</span></div>` : '';
     const ABBR = { lampu: 'L', saklar: 'S', stopkontak: 'SK', ac: 'AC', exhaust: 'EF', panel: 'P', kloset: 'WC', wastafel: 'WT', bakmandi: 'BM', kran: 'K', floordrain: 'FD', septictank: 'ST', tandon: 'TA', pompa: 'PA' };
     let mepSyms = '';
+    const symPts = []; // posisi simbol (px) agar label ruang tidak menimpanya
     for (const g of Object.values(model.groups)) {
       if (!g.mep || !ABBR[g.mep.kind]) continue;
       const pw = V3(g.mep.p).applyMatrix4(new THREE.Matrix4().fromArray(g.m));
@@ -5919,6 +5920,7 @@ function planSheets(vis) {
       if (zz < (li === 0 ? lv.z - 1.6 : lv.z - 0.005) || zz >= lv.z + lv.h - 0.005) continue;
       const [x, y] = sp(pw.x, pw.y, lv.z);
       const lamp = g.mep.kind === 'lampu';
+      symPts.push([x, y]);
       mepSyms += `<g class="mep"><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="13"/>${lamp ? `<path d="M${x - 9} ${y - 9}L${x + 9} ${y + 9}M${x + 9} ${y - 9}L${x - 9} ${y + 9}"/>` : `<text x="${x.toFixed(1)}" y="${(y + 5).toFixed(1)}" text-anchor="middle">${ABBR[g.mep.kind]}</text>`}</g>`;
     }
     let area = 0;
@@ -5927,8 +5929,65 @@ function planSheets(vis) {
       const lab = model.labels.find((l) => l.id === g.room.label);
       const rf = !lab && model.faces.find((f) => (f.group ?? null) === +gid);
       const c = lab ? lab.p : rf ? rf.pts.reduce((a, p) => [a[0] + p[0] / rf.pts.length, a[1] + p[1] / rf.pts.length], [0, 0]) : [box.min.x, box.min.y, lv.z];
-      const [x, y] = sp(c[0], c[1], lv.z);
-      return `<text class="rn" x="${x}" y="${y - 30}" text-anchor="middle">${escHtml(g.room.name)}</text><text class="ra" x="${x}" y="${y - 8}" text-anchor="middle">${g.room.area.toFixed(2)} m²</text>`;
+      // tata letak label: cari titik di dalam ruang yang muat, tidak menimpa simbol/tangga, dekat titik label
+      const fl = model.faces.filter((f) => (f.group ?? null) === +gid && f.n[2] > 0.9).sort((p, q) => G.faceArea(q) - G.faceArea(p))[0];
+      const nm = g.room.name, ar = `${g.room.area.toFixed(2)} m²`;
+      const stairsHere = Object.values(model.groups).filter((sg) => sg.stair?.fp && Math.abs(sg.stair.z - lv.z) < 0.1).map((sg) => sg.stair.fp);
+      const P = fl ? fl.pts : null;
+      // tulisan NAIK di kaki tangga juga dihindari
+      const avoid = symPts.concat(Object.values(model.groups).filter((sg) => sg.stair?.axes?.length && Math.abs(sg.stair.z - lv.z) < 0.1).flatMap((sg) => { const [fx, fy] = sp(sg.stair.axes[0][0][0], sg.stair.axes[0][0][1], cutZ); return [[fx - 22, fy], [fx - 48, fy]]; }));
+      const inPoly = (Q, x, y) => { let k = false; for (let i = 0, j = Q.length - 1; i < Q.length; j = i++) if ((Q[i][1] > y) !== (Q[j][1] > y) && x < ((Q[j][0] - Q[i][0]) * (y - Q[i][1])) / (Q[j][1] - Q[i][1]) + Q[i][0]) k = !k; return k; };
+      const [px0, py0] = sp(c[0], c[1], lv.z);
+      const ppm = Math.abs(sp(c[0] + 1, c[1], lv.z)[0] - px0); // piksel per meter
+      const layout = (wx, wy, k = 1) => {
+        let [x, y] = sp(wx, wy, lv.z);
+        let fs = 22, fa = 19, bad = 0;
+        if (P) {
+          // rentang mendatar ruang pada titik ini, dikurangi tangga
+          const xs = [];
+          for (let i = 0; i < P.length; i++) { const a = P[i], q = P[(i + 1) % P.length]; if ((a[1] - wy) * (q[1] - wy) < 0) xs.push(a[0] + ((q[0] - a[0]) * (wy - a[1])) / (q[1] - a[1])); }
+          xs.sort((p, q) => p - q);
+          let iv = [];
+          for (let k = 0; k + 1 < xs.length; k += 2) if (wx >= xs[k] - 1e-6 && wx <= xs[k + 1] + 1e-6) iv = [[xs[k], xs[k + 1]]];
+          for (const sf of stairsHere) {
+            if (inPoly(sf, wx, wy)) return null;
+            const hx = [];
+            for (let i = 0; i < sf.length; i++) { const a = sf[i], q = sf[(i + 1) % sf.length]; if ((a[1] - wy) * (q[1] - wy) < 0) hx.push(a[0] + ((q[0] - a[0]) * (wy - a[1])) / (q[1] - a[1])); }
+            if (hx.length < 2) continue;
+            const o0 = Math.min(...hx) - 0.05, o1 = Math.max(...hx) + 0.05;
+            iv = iv.flatMap(([u, v]) => [[u, Math.min(v, o0)], [Math.max(u, o1), v]]).filter(([u, v]) => v - u > 0.2 && wx >= u - 1e-6 && wx <= v + 1e-6);
+          }
+          if (!iv.length) return null;
+          const W = (iv[0][1] - iv[0][0]) * ppm - 16;
+          fs = Math.max(10, Math.min(22, W / (nm.length * 0.6)) * k);
+          fa = Math.max(9, Math.min(19, W / (ar.length * 0.56)) * k);
+          const tw = Math.max(nm.length * 0.6 * fs, ar.length * 0.56 * fa);
+          const L = Math.min(sp(iv[0][0], wy, lv.z)[0], sp(iv[0][1], wy, lv.z)[0]) + 8, R = L + W;
+          x = R - L > tw ? Math.min(Math.max(x, L + tw / 2), R - tw / 2) : (L + R) / 2;
+          // seluruh kotak teks harus di dalam ruang dan tidak menimpa simbol/tangga
+          const top = y - 11 - fa - fs + 4, bot = y - 4, toW = (u, v) => [wx + (u - x) / ppm, wy - (v - y) / ppm];
+          for (const [u, v] of [[x - tw / 2, top], [x + tw / 2, top], [x - tw / 2, bot], [x + tw / 2, bot], [x, top], [x, bot]]) {
+            const [a, b] = toW(u, v);
+            if (!inPoly(P, a, b)) bad += 1;
+            if (stairsHere.some((sf) => inPoly(sf, a, b))) bad += 1;
+          }
+          for (const [sx, sy] of avoid) if (Math.abs(sx - x) < tw / 2 + 12 && sy + 13 > top && sy - 13 < bot) bad += 1;
+        }
+        return { x, y, fs, fa, score: bad * 1000 + (22 - fs) * 6 + Math.hypot(x - px0, y - py0) * 0.15 };
+      };
+      let best = layout(c[0], c[1]);
+      if (P && (!best || best.score >= 1000 || best.fs < 22)) {
+        const xs = P.map((p) => p[0]), ys = P.map((p) => p[1]), N = 14;
+        for (let i = 1; i < N; i++) for (let j = 1; j < N; j++) {
+          const wx = Math.min(...xs) + ((Math.max(...xs) - Math.min(...xs)) * i) / N, wy = Math.min(...ys) + ((Math.max(...ys) - Math.min(...ys)) * j) / N;
+          if (!inPoly(P, wx, wy)) continue;
+          for (const k of [1, 0.8, 0.65, 0.55]) { const o = layout(wx, wy, k); if (o && (!best || o.score < best.score)) best = o; }
+        }
+      }
+      best ||= { x: px0, y: py0, fs: 22, fa: 19 };
+      const { x, y, fs, fa } = best;
+      const st = (f, d) => (f < d ? ` style="font-size:${f.toFixed(1)}px"` : '');
+      return `<text class="rn"${st(fs, 22)} x="${x.toFixed(1)}" y="${(y - 11 - fa).toFixed(1)}" text-anchor="middle">${escHtml(nm)}</text><text class="ra"${st(fa, 19)} x="${x.toFixed(1)}" y="${(y - 8).toFixed(1)}" text-anchor="middle">${ar}</text>`;
     }).join('');
     const [l, b] = sp(box.min.x, box.min.y, lv.z), [r, t] = sp(box.max.x, box.max.y, lv.z);
     const y = b + 96, x = l - 96;

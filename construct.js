@@ -318,6 +318,31 @@ export function roomOutline(model, x, y, z, vis = null, cell = 0.02) {
   return { pts: out, area };
 }
 
+// Titik label ruang: titik di dalam poligon yang paling jauh dari dinding (aman untuk ruang bentuk L)
+export function labelPoint(P) {
+  const xs = P.map((p) => p[0]), ys = P.map((p) => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const inside = (x, y) => {
+    let c = false;
+    for (let i = 0, j = P.length - 1; i < P.length; j = i++) if ((P[i][1] > y) !== (P[j][1] > y) && x < ((P[j][0] - P[i][0]) * (y - P[i][1])) / (P[j][1] - P[i][1]) + P[i][0]) c = !c;
+    return c;
+  };
+  const edge = (x, y) => Math.min(...P.map((a, i) => {
+    const b = P[(i + 1) % P.length], dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy;
+    const t = L2 ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / L2)) : 0;
+    return Math.hypot(x - a[0] - t * dx, y - a[1] - t * dy);
+  }));
+  let best = null, bd = -1;
+  const N = 24;
+  for (let i = 0; i <= N; i++) for (let j = 0; j <= N; j++) {
+    const x = x0 + ((x1 - x0) * i) / N, y = y0 + ((y1 - y0) * j) / N;
+    if (!inside(x, y)) continue;
+    const d = edge(x, y) - 1e-3 * Math.hypot(x - (x0 + x1) / 2, y - (y0 + y1) / 2); // seri: pilih yang lebih ke tengah
+    if (d > bd) { bd = d; best = [x, y]; }
+  }
+  return best || P.reduce((s, p) => [s[0] + p[0] / P.length, s[1] + p[1] / P.length], [0, 0]);
+}
+
 // Buat ruang: lantai tipis + label, sebagai grup bermeta 'room'.
 export function makeRoom(model, outline, name, z, opts = {}) {
   const pts = outline.pts.map((p) => [p[0], p[1], z + 0.002]);
@@ -326,7 +351,7 @@ export function makeRoom(model, outline, name, z, opts = {}) {
   f.group = opts.parent ?? null;
   model.faces.push(f);
   const gid = G.makeGroup(model, new Set([f.id]), 'Ruang ' + name, false, opts.parent ?? null);
-  const c = pts.reduce((s, p) => [s[0] + p[0] / pts.length, s[1] + p[1] / pts.length], [0, 0]);
+  const c = labelPoint(pts);
   const lid = model.nextId++;
   model.labels.push({ id: lid, p: [c[0], c[1], z + 0.01], text: `${name}\n${outline.area.toFixed(2)} m²`, room: gid });
   model.groups[gid].room = { name, area: +outline.area.toFixed(3), z, floor: opts.floor || '7.4.1.2', label: lid };
