@@ -820,6 +820,7 @@ export function rabQuantities(model, opt = {}) {
         add('B.2', a); puing += a * 0.04;
       } else if (g.stair || g.slab || g.beam || g.column) { const v = gvol(gid, (f) => !f.finish); add('B.5', v); puing += v; }
       else if (g.mep) add('B.8', 1);
+      else if (g.parent == null) { const v = gvol(gid); if (v > 0.005) { add('B.5', v); puing += v; } } // benda pejal lain (mis. pilar pagar)
       continue;
     }
     if (ph === 'exist') {
