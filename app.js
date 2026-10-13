@@ -4880,6 +4880,7 @@ const sketch = {
   existingAll() { markAllExisting(); },
   structCheck() { return S.structCheck(model).items.filter((x) => x.lvl !== 'ok').map((x) => `${x.lvl === 'err' ? 'MASALAH' : 'PERINGATAN'} ${x.el}: ${x.msg}`); },
   fixStructure() { return fixAllStruct().n; },
+  site(w, d, x0 = 0, y0 = 0) { model.site = w > 0 && d > 0 ? { w, d, x0, y0 } : null; changed(); return C.siteOf(model); },
   pondasi(p) { model.rab ||= {}; model.rab.pondasi = { ...(model.rab.pondasi || {}), ...p }; return C.pondasiOf(model); },
   roof(solidIds, pitchDeg = 30, overhang = 0.4) {
     const ids = new Set(solidIds.flatMap((sid) => this.solidFaces(sid)));
@@ -5855,7 +5856,7 @@ async function exportDrawing() {
   return html.length;
 }
 
-const PLAN_EXTRA_CSS = `.plan .stair { fill: none; stroke: #222; stroke-width: 2; } .plan .tread { stroke: #222; stroke-width: 1.3; } .plan .sarrow { fill: none; stroke: #c2410c; stroke-width: 2; } .plan .sfoot { fill: #c2410c; } .plan .stag { font: 600 15px 'Segoe UI', sans-serif; fill: #c2410c; } .plan .svoid { fill: none; stroke: #555; stroke-width: 1.6; stroke-dasharray: 9 6; }
+const PLAN_EXTRA_CSS = `.plan .stair { fill: none; stroke: #222; stroke-width: 2; } .plan .tread { stroke: #222; stroke-width: 1.3; } .plan .sarrow { fill: none; stroke: #c2410c; stroke-width: 2; } .plan .sfoot { fill: #c2410c; } .plan .stag { font: 600 15px 'Segoe UI', sans-serif; fill: #c2410c; } .plan .svoid { fill: none; stroke: #555; stroke-width: 1.6; stroke-dasharray: 9 6; } .plan .site { fill: none; stroke: #15803d; stroke-width: 2; stroke-dasharray: 22 6 4 6; } .plan .sitetag { font: 600 13px 'Segoe UI', sans-serif; fill: #15803d; }
 .plan .cut-ex { stroke: #8f979f; } .plan .cut-dm { stroke: #d63c2a; stroke-dasharray: 10 7; stroke-width: 4; }
     .plan .beam { stroke: #5b6470; stroke-width: 2.5; stroke-dasharray: 16 8; } .plan .btag { fill: #5b6470; font-size: 14px; font-weight: 700; }
     .rleg { position: absolute; left: 2mm; top: 2mm; background: #fff; border: 0.3mm solid #555; padding: 1.5mm 2.5mm; font-size: 2.8mm; display: flex; gap: 3mm; align-items: center; }
@@ -5954,6 +5955,13 @@ function planSheets(vis) {
         const bm = g.beam, [x1, y1] = sp(bm.p1[0], bm.p1[1], cutZ), [x2, y2] = sp(bm.p2[0], bm.p2[1], cutZ);
         extra += `<line class="beam" x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"/><text class="btag" x="${((x1 + x2) / 2).toFixed(1)}" y="${((y1 + y2) / 2 - 8).toFixed(1)}" text-anchor="middle">B ${Math.round(bm.b * 100)}/${Math.round(bm.h * 100)}</text>`;
       }
+    }
+    // batas tanah (garis titik-strip) di denah lantai dasar
+    const site = li === 0 && C.siteOf(model);
+    if (site) {
+      const sq = [[site.x0, site.y0], [site.x1, site.y0], [site.x1, site.y1], [site.x0, site.y1]].map(([x, y]) => sp(x, y, cutZ));
+      extra += `<polygon class="site" points="${sq.map((q) => q.map((v) => v.toFixed(1)).join(',')).join(' ')}"/>`
+        + `<text class="sitetag" x="${((sq[0][0] + sq[1][0]) / 2).toFixed(1)}" y="${(Math.max(sq[0][1], sq[1][1]) + 22).toFixed(1)}" text-anchor="middle">BATAS TANAH ${fmt(site.w)} × ${fmt(site.d)}</text>`;
     }
     // tangga: anak tangga + panah NAIK; di lantai atasnya garis putus-putus (void)
     for (const [sgid, g] of Object.entries(model.groups)) {
@@ -6538,6 +6546,17 @@ function renderKonsPane() {
   model.rab.prices ||= {};
   P.append(trow('Nama proyek', mkEl('input', { value: pj.name, onchange: (e) => { model.rab.project.name = e.target.value; changed(); } })));
   P.append(trow('Lokasi', mkEl('input', { value: pj.location === '-' ? '' : pj.location, placeholder: 'mis. Bandung', onchange: (e) => { model.rab.project.location = e.target.value; changed(); } })));
+  const st = model.site || {};
+  const sin = (k, label, tip) => mkEl('label', { title: tip }, label, mkEl('input', { type: 'number', step: 0.05, value: st[k] ?? (k[0] === 'x' || k[0] === 'y' ? 0 : ''), placeholder: '-', onchange: (e) => {
+    const s = { w: 0, d: 0, x0: 0, y0: 0, ...(model.site || {}), [k]: +e.target.value || 0 };
+    model.site = s; // berlaku setelah lebar & panjang terisi (C.siteOf)
+    changed();
+  } }));
+  P.append(mkEl('div', { className: 'msec', textContent: 'Batas tanah / kavling (m)' }));
+  P.append(mkEl('div', { className: 'pdgrid' },
+    sin('w', 'Lebar', 'Lebar tanah (arah X). Kosongkan = tanpa batas'), sin('d', 'Panjang', 'Panjang tanah (arah Y)'),
+    sin('x0', 'Mulai X', 'Koordinat X sudut tanah'), sin('y0', 'Mulai Y', 'Koordinat Y sudut tanah')));
+  P.append(mkEl('div', { className: 'muted small', textContent: C.siteOf(model) ? 'Pondasi & footplat di tepi tanah dibuat pinggir (tidak menyeberang batas); Cek struktur memeriksa bagian yang keluar batas.' : 'Isi ukuran tanah agar pondasi & footplat tepi tidak keluar batas.' }));
   const pd = C.pondasiOf(model);
   const pin = (k, label, tip) => mkEl('label', { title: tip }, label, mkEl('input', { type: 'number', step: 0.05, min: 0, value: pd[k], onchange: (e) => {
     model.rab.pondasi = { ...(model.rab.pondasi || {}), [k]: Math.max(0, +e.target.value || 0) };

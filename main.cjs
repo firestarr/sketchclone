@@ -219,8 +219,10 @@ function createWindow() {
         const code = fs.readFileSync(process.env.SK_TEST, 'utf8');
         const result = await win.webContents.executeJavaScript(code);
         await new Promise((r) => setTimeout(r, 300));
-        const img = await win.webContents.capturePage();
-        fs.writeFileSync(process.env.SK_OUT, img.toPNG());
+        try {
+          const img = await win.webContents.capturePage();
+          fs.writeFileSync(process.env.SK_OUT, img.toPNG());
+        } catch (e) { console.log('TEST_WARN capturePage', e.message); } // mis. layar terkunci
         console.log('TEST_RESULT', JSON.stringify(result));
       } catch (err) {
         console.log('TEST_ERROR', err && err.stack ? err.stack : err);
@@ -398,6 +400,7 @@ API \`sketch\` (semua fungsi pembuat benda mengembalikan id solid, kecuali diseb
 - mep(kind, x, y, z, wallNormal=null, angleDeg=0) — utilitas: lampu (plafon), saklar, stopkontak, ac, exhaust, panel (dinding; beri wallNormal mis. [0,1,0] = menghadap +Y), kloset, wastafel, bakmandi, kran, floordrain, septictank, tandon, pompa; masuk RAB beserta perkiraan kabel & pipa
 - stairs(x, y, angleDeg=0, w=0.9, shape='lurus'|'L'|'Lkiri'|'U'|'Ukiri', tread=0.28, riser=0.175) — tangga beton + reling dari lantai aktif ke lantai di atasnya (naik ke arah +Y diputar angleDeg); lantai ruang atas otomatis dilubangi
 - pondasi({top, bot, h, w, d}) — ukuran pondasi batu kali & galian untuk RAB
+- site(w, d, x0=0, y0=0) — batas tanah/kavling; pondasi & footplat di tepi dibuat pinggir (tidak keluar batas), cek struktur memeriksa bagian yang keluar batas & meminta sloof pengikat
 - slab([[x,y],...], zTop, t=0.12) — plat beton (outline 2D, elevasi atas plat). beam([x,y],[x,y], zTop, b=0.15, h=0.3) — balok. column(x, y, b=0.2, H?, footplat?) — kolom struktur di lantai aktif (lantai dasar otomatis berfootplat)
 - Renovasi: existingAll() menandai seluruh model sekarang sebagai bangunan lama; phase(gids, 'exist'|'demo'|'new') menandai grup; yang digambar sesudahnya = pekerjaan baru. RAB hanya menghitung baru + bongkaran
 - structCheck() — daftar masalah/peringatan struktur (plat, balok, kolom, pondasi); fixStructure() menerapkan semua saran

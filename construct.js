@@ -643,16 +643,65 @@ export function makeBeam(model, a, b, zTop, bw = 0.15, h = 0.3, parent = null) {
   model.groups[gid].beam = { b: bw, h, p1: [+a[0].toFixed(4), +a[1].toFixed(4)], p2: [+b[0].toFixed(4), +b[1].toFixed(4)], z: +zTop.toFixed(4), len: +L.toFixed(4) };
   return gid;
 }
+// Sloof pengikat (balok di atas tanah, mis. untuk footplat pinggir)
+export function makeSloof(model, a, b, zTop, bw = 0.15, h = 0.2, parent = null) {
+  const gid = makeBeam(model, a, b, zTop, bw, h, parent);
+  if (gid == null) return null;
+  model.groups[gid].beam.sloof = true;
+  model.groups[gid].name = `Sloof pengikat ${Math.round(bw * 100)}/${Math.round(h * 100)}`;
+  return gid;
+}
+
+// ---------- Batas tanah (kavling persegi panjang: model.site = {w, d, x0, y0}) ----------
+export function siteOf(model) {
+  const s = model.site;
+  if (!s || !(s.w > 0) || !(s.d > 0)) return null;
+  const x0 = +s.x0 || 0, y0 = +s.y0 || 0;
+  return { x0, y0, x1: x0 + s.w, y1: y0 + s.d, w: s.w, d: s.d };
+}
+// jarak dari titik p ke batas tanah searah vektor satuan u (Infinity bila tanpa batas)
+export function siteRay(S, p, u) {
+  if (!S) return Infinity;
+  let t = Infinity;
+  if (u.x > 1e-9) t = Math.min(t, (S.x1 - p.x) / u.x);
+  if (u.x < -1e-9) t = Math.min(t, (S.x0 - p.x) / u.x);
+  if (u.y > 1e-9) t = Math.min(t, (S.y1 - p.y) / u.y);
+  if (u.y < -1e-9) t = Math.min(t, (S.y0 - p.y) / u.y);
+  return Math.max(0, t);
+}
+// pusat footplat B x B untuk kolom di (x, y): digeser ke dalam bila menyeberang batas tanah (footplat pinggir)
+export function footCenter(model, x, y, B) {
+  const S = siteOf(model);
+  if (!S) return [x, y];
+  const cl = (v, a, b) => (b < a ? (a + b) / 2 : Math.min(Math.max(v, a), b));
+  return [cl(x, S.x0 + B / 2, S.x1 - B / 2), cl(y, S.y0 + B / 2, S.y1 - B / 2)];
+}
+// rapatkan titik yang sedikit keluar batas (kolom praktis, ring, sloof) ke garis batas tanah
+function clampToSite(model, faces, tol = 0.15) {
+  const S = siteOf(model);
+  if (!S) return;
+  const cl = (p) => {
+    if (p[0] < S.x0 && p[0] > S.x0 - tol) p[0] = S.x0;
+    if (p[0] > S.x1 && p[0] < S.x1 + tol) p[0] = S.x1;
+    if (p[1] < S.y0 && p[1] > S.y0 - tol) p[1] = S.y0;
+    if (p[1] > S.y1 && p[1] < S.y1 + tol) p[1] = S.y1;
+  };
+  for (const f of faces) { f.pts.forEach(cl); (f.holes || []).forEach((h) => h.forEach(cl)); }
+}
+
 // Kolom struktur b x b dari z0 setinggi H; foot = lebar footplat (0 = tanpa), dalam = kedalaman dasar footplat
 export function makeColumn(model, x, y, z0, H, b = 0.2, opt = {}, parent = null) {
   const foot = opt.foot || 0, depth = opt.depth || 1.0, tf = 0.25;
   const start = model.nextId;
-  const sq = (w) => [[x - w / 2, y - w / 2], [x + w / 2, y - w / 2], [x + w / 2, y + w / 2], [x - w / 2, y + w / 2]];
+  const sq = (w, cx = x, cy = y) => [[cx - w / 2, cy - w / 2], [cx + w / 2, cy - w / 2], [cx + w / 2, cy + w / 2], [cx - w / 2, cy + w / 2]];
   const zb = foot ? z0 - depth + tf : z0;
   prism(model, sq(b), zb, z0 + H - zb, CONC, parent);
-  if (foot) prism(model, sq(foot), z0 - depth, tf, CONC, parent);
-  const gid = groupFrom(model, start, `Kolom ${Math.round(b * 100)}/${Math.round(b * 100)}${foot ? ' + footplat' : ''}`, parent);
-  model.groups[gid].column = { b, H: +H.toFixed(4), x: +x.toFixed(4), y: +y.toFixed(4), z: +z0.toFixed(4), foot, depth };
+  const fc = foot ? footCenter(model, x, y, foot) : [x, y];
+  if (foot) prism(model, sq(foot, fc[0], fc[1]), z0 - depth, tf, CONC, parent);
+  const ecc = [+(fc[0] - x).toFixed(4), +(fc[1] - y).toFixed(4)];
+  const pinggir = Math.abs(ecc[0]) > 0.01 || Math.abs(ecc[1]) > 0.01;
+  const gid = groupFrom(model, start, `Kolom ${Math.round(b * 100)}/${Math.round(b * 100)}${foot ? (pinggir ? ' + footplat pinggir' : ' + footplat') : ''}`, parent);
+  model.groups[gid].column = { b, H: +H.toFixed(4), x: +x.toFixed(4), y: +y.toFixed(4), z: +z0.toFixed(4), foot, depth, ...(pinggir ? { ecc } : {}) };
   return gid;
 }
 // Bangun ulang elemen dengan ukuran baru (fase, tag, induk & nama-ruang dipertahankan)
@@ -668,7 +717,7 @@ export function rebuildElem(model, gid, patch = {}) {
   } else if (g.beam) {
     const s = { ...g.beam, ...patch };
     G.deleteIds(model, G.entitiesInTree(model, gid));
-    ng = makeBeam(model, s.p1, s.p2, s.z, s.b, s.h, keep.parent);
+    ng = (s.sloof ? makeSloof : makeBeam)(model, s.p1, s.p2, s.z, s.b, s.h, keep.parent);
   } else if (g.column) {
     const s = { ...g.column, ...patch };
     G.deleteIds(model, G.entitiesInTree(model, gid));
@@ -806,7 +855,13 @@ export function rabQuantities(model, opt = {}) {
         add('7.9.2.1', ex * (s.area + 0.3 * per));
       }
     }
-    if (g.beam) {
+    if (g.beam?.sloof) {
+      const bm = g.beam;
+      add('6.1.1.1', (bm.b + 0.3) * (bm.h + 0.1) * bm.len);
+      conc(bm.b * bm.h * bm.len);
+      add('6.5.1.2', 2 * bm.h * bm.len);
+      bars.push(...elemBars('balok', { b: bm.b, h: bm.h, len: bm.len, n: 1 }));
+    } else if (g.beam) {
       const bm = g.beam;
       const mid = [(bm.p1[0] + bm.p2[0]) / 2, (bm.p1[1] + bm.p2[1]) / 2];
       const sl = slabAt(model, mid[0], mid[1], bm.z, 0.06) || slabAt(model, mid[0] + 0.2, mid[1], bm.z, 0.06) || slabAt(model, mid[0], mid[1] + 0.2, bm.z, 0.06);
@@ -1183,14 +1238,20 @@ export function buildStructure(model, wallGid, opt = {}) {
     const pd = pondasiOf(model);
     const P = w.pts.map(V), segs = w.closed ? P.length : P.length - 1;
     const z1 = zb - 0.2, z0 = z1 - pd.h;
+    const S = siteOf(model);
     for (let i = 0; i < segs; i++) {
       const a = P[i], c = P[(i + 1) % P.length], L = a.distanceTo(c);
       const cm = { ...model, faces: [], nextId: model.nextId };
-      const ext = pd.bot / 2;
-      const f = G.makeFace(cm, [[-ext, -pd.bot / 2, 0], [-ext, pd.bot / 2, 0], [-ext, pd.top / 2, pd.h], [-ext, -pd.top / 2, pd.h]], new THREE.Vector3(1, 0, 0), STONE);
+      const dd = c.clone().sub(a).setZ(0).normalize(), nn = new THREE.Vector3(-dd.y, dd.x, 0);
+      // pondasi pinggir: di sisi batas tanah muka luar dibuat tegak rata batas, lebar tetap ke dalam
+      const eL = Math.min(siteRay(S, a, nn), siteRay(S, c, nn)), eR = Math.min(siteRay(S, a, nn.clone().negate()), siteRay(S, c, nn.clone().negate()));
+      let bLo = -pd.bot / 2, bHi = pd.bot / 2, tLo = -pd.top / 2, tHi = pd.top / 2;
+      if (bHi > eL + 1e-6) { bHi = eL; bLo = eL - pd.bot; tHi = Math.min(tHi, eL); tLo = tHi - pd.top; }
+      else if (-bLo > eR + 1e-6) { bLo = -eR; bHi = -eR + pd.bot; tLo = Math.max(tLo, -eR); tHi = tLo + pd.top; }
+      const extA = Math.min(pd.bot / 2, siteRay(S, a, dd.clone().negate())), extB = Math.min(pd.bot / 2, siteRay(S, c, dd));
+      const f = G.makeFace(cm, [[-extA, bLo, 0], [-extA, bHi, 0], [-extA, tHi, pd.h], [-extA, tLo, pd.h]], new THREE.Vector3(1, 0, 0), STONE);
       cm.faces.push(f);
-      G.pushPull(cm, f.id, L + 2 * ext);
-      const dd = c.clone().sub(a).setZ(0).normalize();
+      G.pushPull(cm, f.id, L + extA + extB);
       G.applyMatrix(cm, new Set(cm.faces.map((q) => q.id)), new THREE.Matrix4().makeRotationZ(Math.atan2(dd.y, dd.x)).setPosition(a.x, a.y, z0));
       model.nextId = cm.nextId;
       model.faces.push(...cm.faces);
@@ -1198,6 +1259,7 @@ export function buildStructure(model, wallGid, opt = {}) {
     }
   }
   const ids = new Set(model.faces.filter((f) => f.id >= start).map((f) => f.id));
+  clampToSite(model, model.faces.filter((f) => ids.has(f.id)));
   for (const f of model.faces) if (ids.has(f.id)) f.group = null;
   const sg = G.makeGroup(model, ids, 'Struktur ' + (g.name || 'Dinding'), false, null);
   model.groups[sg].struct = { colPts: cols.map(({ p, d }) => [+p.x.toFixed(4), +p.y.toFixed(4), +Math.atan2(d.y, d.x).toFixed(4)]), z: zb, wall: +wallGid, cols: cols.length, colB: b, ringH: rh, colH: +(h - rh).toFixed(3), ring: w.len, sloof: ground ? w.len : 0, pondasi: +pondVol.toFixed(3) };

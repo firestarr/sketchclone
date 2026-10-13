@@ -166,6 +166,7 @@ function checkSlab(sl, D, o, out) {
 
 // tumpuan sepanjang balok (parameter 0..L): kolom, dinding bersilang/di bawahnya, balok lain yang bersilang
 function checkBeam(bm, D, o, out) {
+  if (bm.sloof) { out.push({ lvl: 'ok', el: 'Sloof', gid: bm.gid, msg: `Sloof pengikat ${cm(bm.b)}/${cm(bm.h)} sepanjang ${fmtm(bm.len)} (di atas tanah).` }); return; }
   const a = bm.p1, b = bm.p2, L = bm.len, ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L;
   const zb = bm.z - bm.h;
   const at = (p) => ((p[0] - a[0]) * ux + (p[1] - a[1]) * uy);
@@ -342,6 +343,7 @@ export function structCheck(model) {
       if (w.maxP > o.soil * pd.bot * 2) out.push({ lvl: 'warn', el: 'Pondasi', gid: wl.gid, msg: `${nm}: beban terpusat kolom ${w.maxP.toFixed(0)} kN terlalu besar untuk pondasi batu kali — tambahkan footplat ± ${cm(Math.max(0.6, ceil5(Math.sqrt(w.maxP * 1.1 / o.soil))))} cm di bawah kolom.` });
     }
   }
+  checkSite(model, D, L0, out);
   const rank = { err: 0, warn: 1, ok: 2 };
   out.sort((a, b) => rank[a.lvl] - rank[b.lvl]);
   return {
@@ -352,6 +354,85 @@ export function structCheck(model) {
   };
 }
 
+// ---- batas tanah: bagian bangunan yang menyeberang & footplat pinggir tanpa sloof pengikat ----
+const BUILD_KEYS = ['wall', 'slab', 'beam', 'column', 'struct', 'roof', 'stair'];
+// ujung sloof pengikat: dinding lantai dasar atau kolom pertama yang dilewati sinar dari kolom searah u
+function tieTarget(c, u, walls, cols, L0, max = 8) {
+  let best = Infinity;
+  for (const w of walls) for (const [p, q] of w.segs) {
+    const ex = q[0] - p[0], ey = q[1] - p[1], den = u[0] * ey - u[1] * ex;
+    if (Math.abs(den) < 1e-6 * Math.hypot(ex, ey)) continue; // sejajar
+    const wx = p[0] - c.x, wy = p[1] - c.y;
+    const t = (wx * ey - wy * ex) / den, s = (wx * u[1] - wy * u[0]) / den;
+    if (t > 0.3 && t < best && s > -0.02 && s < 1.02) best = t;
+  }
+  for (const d of cols) {
+    if (d === c || d.z0 > L0 + 0.1) continue;
+    const dx = d.x - c.x, dy = d.y - c.y, t = dx * u[0] + dy * u[1];
+    if (t > 0.3 && t < best && Math.abs(dx * u[1] - dy * u[0]) < 0.15) best = t;
+  }
+  return best <= max ? [+(c.x + u[0] * best).toFixed(4), +(c.y + u[1] * best).toFixed(4)] : null;
+}
+function checkSite(model, D, L0, out) {
+  const S = C.siteOf(model);
+  if (!S) return;
+  const root = new Map();
+  const rootOf = (gid) => {
+    if (root.has(gid)) return root.get(gid);
+    let r = gid;
+    for (let n = 0; n < 50 && model.groups[r]?.parent != null && model.groups[model.groups[r].parent]; n++) r = model.groups[r].parent;
+    root.set(gid, r);
+    return r;
+  };
+  const box = new Map();
+  for (const f of model.faces) {
+    if (f.group == null) continue;
+    const r = rootOf(f.group);
+    let b = box.get(r);
+    if (!b) box.set(r, (b = [Infinity, Infinity, -Infinity, -Infinity]));
+    for (const p of f.pts) { b[0] = Math.min(b[0], p[0]); b[1] = Math.min(b[1], p[1]); b[2] = Math.max(b[2], p[0]); b[3] = Math.max(b[3], p[1]); }
+  }
+  let nOut = 0;
+  for (const [r, b] of box) {
+    const g = model.groups[r];
+    if (!g || !BUILD_KEYS.some((k) => g[k])) continue;
+    const ph = C.phaseOf(model, r);
+    if (ph === 'demo') continue;
+    const d = { kiri: S.x0 - b[0], kanan: b[2] - S.x1, depan: S.y0 - b[1], belakang: b[3] - S.y1 };
+    const over = Math.max(...Object.values(d));
+    if (over <= 0.02) continue;
+    nOut++;
+    const sides = Object.entries(d).filter(([, v]) => v > 0.02).map(([k, v]) => `${k} ${cm(v)} cm`).join(', ');
+    let fix = null;
+    if (g.column) fix = { kind: 'elem', gid: r, patch: {}, label: g.column.foot ? 'Jadikan footplat pinggir' : 'Bangun ulang' };
+    else if (g.struct && model.groups[g.struct.wall]) fix = { kind: 'wall', gid: g.struct.wall, patch: {}, label: 'Jadikan pondasi pinggir' };
+    out.push({ lvl: ph === 'exist' ? 'warn' : 'err', el: 'Batas tanah', gid: r, msg: `${g.name || 'Bagian bangunan'} keluar batas tanah (${sides})${ph === 'exist' ? ' — bangunan lama, cek di lapangan' : ''}.`, fix });
+  }
+  if (!nOut) out.push({ lvl: 'ok', el: 'Batas tanah', gid: null, msg: `Semua bagian bangunan di dalam tanah ${fmtm(S.w)} × ${fmtm(S.d)}.` });
+  // footplat pinggir (eksentris) wajib diikat sloof ke dalam agar tidak berputar
+  const walls0 = D.walls.filter((w) => Math.abs(w.zb - L0) < 0.1);
+  const sloofs = D.beams.filter((b) => b.sloof);
+  for (const c of D.cols) {
+    const ecc = c.own && c.foot && model.groups[c.gid]?.column?.ecc;
+    if (!ecc) continue;
+    const beams = [];
+    let miss = 0;
+    for (const [ax, v] of [[0, ecc[0]], [1, ecc[1]]]) {
+      if (Math.abs(v) < 0.01) continue;
+      const u = ax === 0 ? [Math.sign(v), 0] : [0, Math.sign(v)];
+      const tied = sloofs.some((s) => [[s.p1, s.p2], [s.p2, s.p1]].some(([p, q]) => Math.hypot(p[0] - c.x, p[1] - c.y) < 0.25 && (q[0] - p[0]) * u[0] + (q[1] - p[1]) * u[1] > 0.7 * Math.hypot(q[0] - p[0], q[1] - p[1])));
+      if (tied) continue;
+      const end = tieTarget(c, u, walls0, D.cols, L0);
+      if (end) beams.push({ a: [c.x, c.y], b: end, z: c.z0, bw: 0.15, h: 0.2, sloof: true });
+      else miss++;
+    }
+    const where = `Footplat pinggir ${cm(c.foot)}×${cm(c.foot)} di (${fmtm(c.x)}, ${fmtm(c.y)})`;
+    if (beams.length) out.push({ lvl: 'err', el: 'Pondasi', gid: c.gid, msg: `${where} belum diikat sloof ke dalam — beban kolom tidak di tengah footplat sehingga footplat bisa berputar. Tambahkan sloof pengikat 15/20 (${beams.map((b) => fmtm(Math.hypot(b.b[0] - b.a[0], b.b[1] - b.a[1]))).join(', ')}).`, fix: { kind: 'add', beams, cols: [], label: 'Tambah sloof pengikat' } });
+    else if (miss) out.push({ lvl: 'warn', el: 'Pondasi', gid: c.gid, msg: `${where} perlu sloof pengikat ke kolom/dinding di dalam, tetapi tidak ditemukan tumpuan dalam 8 m — gambar sloof secara manual.` });
+    else out.push({ lvl: 'ok', el: 'Pondasi', gid: c.gid, msg: `${where} sudah diikat sloof.` });
+  }
+}
+
 // Terapkan saran perbaikan. Mengembalikan jumlah elemen yang diubah.
 export function applyFix(model, fix, opt = {}) {
   if (!fix) return 0;
@@ -360,7 +441,7 @@ export function applyFix(model, fix, opt = {}) {
     const g = model.groups[fix.gid];
     if (!g?.wall) return 0;
     Object.assign(g.wall, fix.patch);
-    if (C.phaseOf(model, fix.gid) === 'exist') g.wall.upgrade = { ...(g.wall.upgrade || {}), ...fix.patch }; // perkuatan = pekerjaan baru
+    if (C.phaseOf(model, fix.gid) === 'exist' && Object.keys(fix.patch).length) g.wall.upgrade = { ...(g.wall.upgrade || {}), ...fix.patch }; // perkuatan = pekerjaan baru
     const z0 = C.levelsOf(model)[0].z;
     const old = Object.values(model.groups).find((q) => q.struct?.wall === fix.gid);
     if (old || opt.rebuildStruct) C.buildStructure(model, fix.gid, { ground: Math.abs(g.wall.pts[0][2] - z0) < 0.1, tag: old ? old.tag : opt.tag });
@@ -368,7 +449,7 @@ export function applyFix(model, fix, opt = {}) {
   }
   if (fix.kind === 'add') {
     let n = 0;
-    for (const b of fix.beams) if (C.makeBeam(model, b.a, b.b, b.z, b.bw, b.h, opt.parent ?? null) != null) n++;
+    for (const b of fix.beams) if ((b.sloof ? C.makeSloof : C.makeBeam)(model, b.a, b.b, b.z, b.bw, b.h, opt.parent ?? null) != null) n++;
     for (const c of fix.cols) {
       const ground = c.z0 < C.levelsOf(model)[0].z + 0.1;
       if (C.makeColumn(model, c.x, c.y, c.z0, c.H, c.b, { foot: ground ? 0.8 : 0, depth: 1.0 }, opt.parent ?? null) != null) n++;
