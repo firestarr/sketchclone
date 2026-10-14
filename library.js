@@ -151,6 +151,124 @@ export const LIBRARY = {
   },
 };
 
+// ---- Figur warga bergaya Indonesia (sama dengan warga game Ladang Nusantara) ----
+// Badan blok sederhana ala game petani; pakaian khas: batik, lurik, kebaya, sarung, jarik, peci, blangkon,
+// udeng, kerudung, caping, selendang, dan seragam SD merah-putih. Menghadap -Y, alas di z = 0.
+function slab(m, pts, n, color, t) {
+  const f = face(m, pts, n, color);
+  if (f) G.pushPull(m, f.id, t);
+}
+export function buildFigure(m, s) {
+  const kid = !!s.kid, H = s.h ?? (kid ? 1.12 : s.female ? 1.56 : 1.66);
+  const hs = kid ? 0.27 : 0.22; // ukuran kepala (anak berkepala besar)
+  const legTop = H * (kid ? 0.36 : 0.47), torsoTop = H - hs - (kid ? 0.03 : 0.06);
+  const tw = kid ? 0.3 : s.female ? 0.32 : 0.38, td = kid ? 0.17 : 0.2;
+  const skin = s.skin ?? '#b98256', hair = s.hair ?? '#1c1410', shoe = s.shoes ?? '#2a2018';
+  const bottom = s.bottom ?? 'celana', bc = s.bottomColor ?? '#2c3e50', bc2 = s.bottomColor2 ?? '#1b2631';
+  const lw = kid ? 0.11 : 0.13;
+  // kaki + sepatu
+  for (const x of [-tw / 2 + 0.02, tw / 2 - 0.02 - lw]) {
+    box(m, x, -0.09, 0, lw, 0.18, 0.06, shoe);
+    box(m, x, -0.07, 0.06, lw, 0.14, legTop - 0.06, bottom === 'celana' || bottom === 'rok' ? (bottom === 'rok' ? skin : bc) : skin);
+  }
+  // bawahan: sarung (kotak-kotak = pita warna berselang), jarik batik, rok
+  if (bottom === 'sarung' || bottom === 'jarik' || bottom === 'rok') {
+    const z0 = bottom === 'jarik' ? 0.08 : bottom === 'rok' ? legTop * 0.45 : H * 0.2;
+    const w = tw + 0.04, d = td + 0.03, n = bottom === 'rok' ? 1 : 6, step = (legTop + 0.02 - z0) / n;
+    for (let i = 0; i < n; i++) box(m, -w / 2, -d / 2, z0 + i * step, w, d, step, i % 2 ? bc2 : bc);
+    if (bottom === 'sarung') box(m, -w / 2 - 0.005, -d / 2 - 0.005, legTop - 0.06, w + 0.01, d + 0.01, 0.06, bc2); // gulungan
+  }
+  // badan (baju) + motif batik/lurik sebagai garis/bintik di depan
+  const shirt = s.shirt ?? '#c0392b';
+  box(m, -tw / 2, -td / 2, legTop, tw, td, torsoTop - legTop, shirt);
+  if (s.motif) {
+    const mc = s.motifColor ?? '#3b2414', th = torsoTop - legTop;
+    if (s.motif === 'lurik') for (let i = 0; i < 5; i++) box(m, -tw / 2 + 0.02 + i * (tw - 0.04) / 5, -td / 2 - 0.006, legTop + 0.02, 0.012, 0.006, th - 0.04, mc);
+    else for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) {
+      const x = -tw / 2 + 0.05 + c * (tw - 0.1) / 2 + (r % 2) * 0.03, z = legTop + 0.05 + r * (th - 0.1) / 2;
+      if (s.motif === 'parang') slab(m, [[x - 0.03, -td / 2 - 0.004, z - 0.02], [x - 0.01, -td / 2 - 0.004, z - 0.02], [x + 0.03, -td / 2 - 0.004, z + 0.03], [x + 0.01, -td / 2 - 0.004, z + 0.03]], V(0, -1, 0), mc, 0.004);
+      else box(m, x - 0.02, -td / 2 - 0.006, z - 0.02, 0.04, 0.006, 0.04, mc); // kawung/mega: bintik
+    }
+  }
+  if (s.celemek) box(m, -tw / 2 + 0.05, -td / 2 - 0.012, legTop - 0.25, tw - 0.1, 0.012, 0.45, s.female ? '#e9dfc8' : '#6e4a2e');
+  // lengan + tangan
+  const aw = kid ? 0.08 : 0.09, sleeve = s.sleeve ?? shirt;
+  for (const x of [-tw / 2 - aw, tw / 2]) {
+    box(m, x, -0.06, torsoTop - (torsoTop - legTop) * (s.longSleeve ? 0.95 : 0.45), aw, 0.12, (torsoTop - legTop) * (s.longSleeve ? 0.95 : 0.45), sleeve);
+    box(m, x, -0.06, legTop - 0.05, aw, 0.12, torsoTop - legTop - (torsoTop - legTop) * (s.longSleeve ? 0.95 : 0.45) + 0.05, skin);
+  }
+  // selendang songket miring di dada
+  if (s.selendang) slab(m, [[-tw / 2, -td / 2 - 0.01, torsoTop - 0.02], [-tw / 2 + 0.1, -td / 2 - 0.01, torsoTop - 0.02], [tw / 2, -td / 2 - 0.01, legTop + 0.05], [tw / 2 - 0.1, -td / 2 - 0.01, legTop + 0.05]].reverse(), V(0, -1, 0), s.selendang, 0.01);
+  if (s.tas) box(m, -tw / 2 + 0.04, td / 2, legTop + 0.06, tw - 0.08, kid ? 0.1 : 0.12, (torsoTop - legTop) * 0.7, s.tas);
+  // leher + kepala blok
+  const hz = torsoTop + (kid ? 0.03 : 0.06);
+  box(m, -0.04, -0.04, torsoTop, 0.08, 0.08, hz - torsoTop, skin);
+  box(m, -hs / 2, -hs / 2, hz, hs, hs, hs * 1.08, skin);
+  const fy = -hs / 2 - 0.004, ez = hz + hs * 0.55;
+  for (const x of [-hs * 0.22, hs * 0.22 - 0.03]) box(m, x, fy, ez, 0.03, 0.004, kid ? 0.05 : 0.035, '#1a1a1a'); // mata
+  box(m, -0.03, fy, hz + hs * 0.25, 0.06, 0.004, 0.012, kid ? '#d9534f' : '#8a4b3a'); // mulut
+  if (s.kumis) box(m, -0.045, fy - 0.004, hz + hs * 0.34, 0.09, 0.008, 0.018, hair);
+  if (s.janggut) box(m, -hs * 0.35, fy - 0.006, hz - 0.03, hs * 0.7, 0.03, hs * 0.3, hair);
+  if (s.kacamata) for (const x of [-hs * 0.3, hs * 0.05]) box(m, x, fy - 0.006, ez - 0.01, hs * 0.25, 0.006, hs * 0.16, '#1c1c1c');
+  // rambut (kecuali tertutup kerudung)
+  const top = hz + hs * 1.08;
+  if (s.head !== 'kerudung') {
+    box(m, -hs / 2 - 0.01, -hs / 2 + 0.03, top - 0.05, hs + 0.02, hs - 0.02, 0.07, hair);
+    box(m, -hs / 2 - 0.01, hs / 2 - 0.04, hz + (s.longHair ? -0.08 : hs * 0.45), hs + 0.02, 0.05, (s.longHair ? hs + 0.06 : hs * 0.6), hair);
+  }
+  if (s.sanggul) box(m, -0.05, hs / 2 - 0.01, top - 0.12, 0.1, 0.08, 0.1, hair);
+  // penutup kepala khas
+  switch (s.head) {
+    case 'peci': box(m, -hs / 2 - 0.008, -hs / 2 + 0.005, top - 0.045, hs + 0.016, hs - 0.0, 0.11, '#0e0e10'); break;
+    case 'blangkon':
+      box(m, -hs / 2 - 0.014, -hs / 2 - 0.004, top - 0.07, hs + 0.028, hs + 0.008, 0.1, s.headColor ?? '#6b3f1d');
+      box(m, -hs / 2 - 0.016, -hs / 2 - 0.006, top - 0.03, hs + 0.032, 0.01, 0.02, '#e2c48c');
+      box(m, -0.05, hs / 2 - 0.02, top - 0.12, 0.1, 0.08, 0.09, '#3b2414'); break; // mondolan
+    case 'udeng':
+      box(m, -hs / 2 - 0.012, -hs / 2 - 0.012, top - 0.07, hs + 0.024, hs + 0.024, 0.05, s.headColor ?? '#f2f2ee');
+      slab(m, [[-0.04, -hs / 2 - 0.016, top - 0.04], [0.04, -hs / 2 - 0.016, top - 0.04], [0, -hs / 2 - 0.016, top + 0.06]], V(0, -1, 0), s.headColor ?? '#f2f2ee', 0.02); break;
+    case 'kerudung': {
+      const k = s.headColor ?? '#2e4053';
+      box(m, -hs / 2 - 0.02, -hs / 2 + 0.01, hz - 0.02, hs + 0.04, hs + 0.01, hs * 1.08 + 0.06, k);
+      box(m, -hs / 2 - 0.02, -hs / 2 - 0.02, top - 0.01, hs + 0.04, 0.04, 0.05, k);
+      box(m, -tw / 2 + 0.02, -td / 2 - 0.02, torsoTop - 0.12, tw - 0.04, td + 0.04, 0.14, k); break; // menutup bahu
+    }
+    case 'caping': cone(m, 0, 0, top - 0.02, kid ? 0.25 : 0.32, 0.16, '#d8b25a', 14); break;
+    case 'topi_sd':
+      box(m, -hs / 2 - 0.005, -hs / 2 - 0.005, top - 0.06, hs + 0.01, hs + 0.01, 0.08, s.headColor ?? '#c62828');
+      box(m, -hs / 2 + 0.02, -hs / 2 - 0.1, top - 0.06, hs - 0.04, 0.1, 0.02, s.headColor ?? '#c62828');
+      box(m, -0.02, -hs / 2 - 0.009, top - 0.04, 0.04, 0.004, 0.03, '#f9d71c'); break;
+    default: break;
+  }
+  if (s.pita) for (const x of [-0.07, 0.01]) box(m, x, -0.01, top - 0.01, 0.06, 0.04, 0.05, s.pita);
+}
+
+// spesifikasi warga (id sama dengan game) - SD: kemeja putih, bawahan merah
+const SD = { shirt: '#f4f4f2', bottomColor: '#c0392b', shoes: '#1d1d1d', tas: '#1565c0' };
+export const FIGURES = {
+  joko: { name: 'Pak Joko (tukang kayu)', shirt: '#b49674', motif: 'lurik', motifColor: '#4a3020', bottom: 'sarung', bottomColor: '#1e463c', bottomColor2: '#141e28', head: 'blangkon', kumis: true, skin: '#94603c' },
+  wulan: { name: 'Wulan (bidan)', female: true, shirt: '#7fc4e8', motif: 'kawung', motifColor: '#2e6f99', bottom: 'rok', bottomColor: '#2e4053', head: 'kerudung', headColor: '#f4f4f2', longSleeve: true, skin: '#c99468' },
+  lastri: { name: 'Bu Lastri (penjual jamu)', female: true, shirt: '#f2c94c', motif: 'parang', motifColor: '#7a5a10', bottom: 'jarik', bottomColor: '#78482a', bottomColor2: '#e2c48c', selendang: '#7a1020', sanggul: true, longSleeve: true, skin: '#a87048' },
+  udin: { name: 'Pak Udin (pembuat perahu)', shirt: '#1f618d', bottom: 'sarung', bottomColor: '#7a1c28', bottomColor2: '#28264a', head: 'peci', kumis: true, skin: '#7f5132' },
+  kartika: { name: 'Kartika (penyelam mutiara)', female: true, shirt: '#48c9b0', motif: 'kawung', motifColor: '#0e6655', bottom: 'celana', bottomColor: '#1b4f72', sanggul: true, longHair: false, skin: '#94603c' },
+  rizal: { name: 'Rizal (penjaga mercusuar)', shirt: '#5d6d7e', motif: 'kawung', motifColor: '#1b2631', bottom: 'celana', bottomColor: '#2c3e50', tas: '#7a5232', skin: '#b98256' },
+  hana: { name: 'Bu Hana (penjual es kelapa)', female: true, shirt: '#f5b041', motif: 'kawung', motifColor: '#9a5a10', bottom: 'rok', bottomColor: '#5b4a3a', head: 'kerudung', headColor: '#16a085', celemek: true, longSleeve: true, skin: '#c99468' },
+  darto: { name: 'Mbah Darto (dalang)', shirt: '#6e2c00', motif: 'parang', motifColor: '#e2c48c', bottom: 'jarik', bottomColor: '#78482a', bottomColor2: '#30200f', head: 'blangkon', janggut: true, hair: '#b3afa8', h: 1.6, skin: '#a87048' },
+  sekar: { name: 'Sekar (penari)', female: true, shirt: '#c0392b', motif: 'kawung', motifColor: '#f5d7a0', bottom: 'jarik', bottomColor: '#26345c', bottomColor2: '#e6dec8', selendang: '#e2b33c', sanggul: true, longSleeve: true, skin: '#b98256' },
+  yoga: { name: 'Yoga (fotografer alam)', shirt: '#28b463', bottom: 'celana', bottomColor: '#4b5320', head: 'udeng', tas: '#d35400', skin: '#94603c', h: 1.72 },
+  liong: { name: 'Koh Liong (toko roti)', shirt: '#b03a2e', motif: 'kawung', motifColor: '#f5d7a0', bottom: 'celana', bottomColor: '#3b3b3b', kacamata: true, skin: '#e7bf98' },
+  maya: { name: 'Maya (barista)', female: true, shirt: '#a04000', bottom: 'celana', bottomColor: '#2e2e3a', celemek: true, longHair: true, skin: '#c99468' },
+  arif: { name: 'Pak Arif (polisi)', shirt: '#7f8c8d', bottom: 'celana', bottomColor: '#5b4a3a', head: 'peci', kumis: true, h: 1.74, skin: '#b98256' },
+  rini: { name: 'Bu Rini (penjahit)', female: true, shirt: '#af7ac5', motif: 'parang', motifColor: '#4a235a', bottom: 'rok', bottomColor: '#4d2c19', head: 'kerudung', headColor: '#7d3c98', kacamata: true, longSleeve: true, skin: '#d9aa7e' },
+  putri: { name: 'Putri (anak SD)', kid: true, female: true, ...SD, bottom: 'rok', pita: '#e91e63', tas: '#e91e63', longHair: true, skin: '#c99468' },
+  raka: { name: 'Raka (anak SD)', kid: true, ...SD, bottom: 'celana', head: 'topi_sd', skin: '#b98256' },
+  bima: { name: 'Bima (anak SD)', kid: true, ...SD, bottom: 'celana', head: 'peci', tas: '#117864', skin: '#7f5132' },
+  lala: { name: 'Lala (anak TK)', kid: true, female: true, shirt: '#f7dc6f', bottom: 'rok', bottomColor: '#2e86c1', shoes: '#e8e8e8', pita: '#f1c40f', h: 1.0, skin: '#d9aa7e' },
+  adit: { name: 'Adit (anak SD)', kid: true, ...SD, bottom: 'celana', head: 'topi_sd', tas: '#2e7d32', skin: '#94603c' },
+  kiki: { name: 'Kiki (anak SD)', kid: true, female: true, ...SD, bottom: 'rok', head: 'kerudung', headColor: '#f4f4f2', tas: '#8e44ad', longSleeve: true, skin: '#c99468' },
+};
+for (const [k, s] of Object.entries(FIGURES)) LIBRARY['warga_' + k] = { name: s.name, icon: s.kid ? '🧒' : s.female ? '👩' : '👨', grp: 'warga', build: (m) => buildFigure(m, s) };
+
 const cache = new Map();
 export function libraryModel(key) {
   if (!cache.has(key)) {

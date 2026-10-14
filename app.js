@@ -5047,11 +5047,14 @@ function renderLibPane() {
   const P = $('pane-lib');
   P.replaceChildren();
   P.append(mkEl('div', { className: 'ttl', textContent: 'Pustaka Komponen' }));
-  P.append(mkEl('div', { className: 'libgrid' }, ...Object.entries(LIBRARY).map(([k, it]) =>
-    mkEl('button', {
-      title: `Tempatkan ${it.name}`,
-      onclick: () => startPlace({ label: it.name, gen: (m, at, n, angle) => insertLibrary(m, k, at, angle, editGroup) }),
-    }, mkEl('b', { textContent: it.icon }), mkEl('span', { textContent: it.name })))));
+  const libBtn = ([k, it]) => mkEl('button', {
+    title: `Tempatkan ${it.name}`,
+    onclick: () => startPlace({ label: it.name, gen: (m, at, n, angle) => insertLibrary(m, k, at, angle, editGroup) }),
+  }, mkEl('b', { textContent: it.icon }), mkEl('span', { textContent: it.name }));
+  P.append(mkEl('div', { className: 'libgrid' }, ...Object.entries(LIBRARY).filter(([, it]) => !it.grp).map(libBtn)));
+  P.append(mkEl('div', { className: 'ttl', style: 'margin-top:16px', textContent: 'Figur Warga Nusantara' }));
+  P.append(mkEl('div', { className: 'muted small', textContent: 'Orang berpakaian khas Indonesia (batik, kebaya, sarung, peci, blangkon, kerudung, seragam SD) untuk mengisi gambar & render.' }));
+  P.append(mkEl('div', { className: 'libgrid' }, ...Object.entries(LIBRARY).filter(([, it]) => it.grp === 'warga').map(libBtn)));
   P.append(mkEl('div', { className: 'muted small', textContent: 'Klik item lalu klik di model untuk menaruhnya (panah kiri/kanan memutar). Semua salinan item yang sama bertaut: edit satu, semua ikut berubah.' }));
   // pustaka online
   P.append(mkEl('div', { className: 'ttl', style: 'margin-top:16px', textContent: 'Pustaka Online (GitHub)' }));

@@ -37,6 +37,10 @@ Installer belum ditandatangani digital, jadi Windows SmartScreen bisa menampilka
 
 Tekan **F1** di aplikasi untuk daftar pintasan keyboard.
 
+## Figur Warga Nusantara
+
+Panel **Pustaka** juga berisi 20 figur orang berpakaian khas Indonesia (14 dewasa + 6 anak): batik, lurik, kebaya, sarung, jarik, peci, blangkon, udeng, kerudung, caping, selendang songket, dan seragam SD merah-putih. Pakai untuk mengisi gambar kerja dan render; dari skrip: `sketch.library('warga_joko', x, y)`.
+
 ## Pustaka komponen online
 
 Komponen di folder [`library/`](library) bisa dijelajahi dan ditempatkan langsung dari aplikasi (panel kanan → **Pustaka** → **Muat pustaka online**).
