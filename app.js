@@ -1033,6 +1033,141 @@ function makeBuiltinTextures() {
       g.stroke();
     }
   });
+  // kain Nusantara (dipakai figur warga): batik parang/kawung/mega mendung, lurik, sarung, songket, poleng
+  const parang = (bg, fg, ln) => (g) => {
+    g.fillStyle = bg;
+    g.fillRect(0, 0, 256, 256);
+    for (let k = -4; k < 9; k++) {
+      const o = k * 64;
+      g.strokeStyle = ln;
+      g.lineWidth = 3;
+      g.beginPath();
+      g.moveTo(o - 40, -40);
+      g.lineTo(o + 296, 296);
+      g.stroke();
+      for (let i = -2; i < 10; i++) {
+        const cx = o + i * 32 + 22, cy = i * 32 - 10;
+        g.fillStyle = fg;
+        g.beginPath();
+        g.ellipse(cx, cy, 15, 8, Math.PI / 4, 0, Math.PI * 2);
+        g.fill();
+        g.strokeStyle = ln;
+        g.lineWidth = 2.5;
+        g.beginPath();
+        g.ellipse(cx, cy, 11, 5, Math.PI / 4, Math.PI, Math.PI * 1.9);
+        g.stroke();
+        g.fillStyle = ln;
+        g.fillRect(cx + 9, cy + 9, 5, 5);
+      }
+    }
+  };
+  const kawung = (bg, fg, ln) => (g) => {
+    g.fillStyle = bg;
+    g.fillRect(0, 0, 256, 256);
+    for (let gx = 0; gx <= 256; gx += 64)
+      for (let gy = 0; gy <= 256; gy += 64) {
+        for (let a = 0; a < 4; a++) {
+          const t = (a * Math.PI) / 2 + Math.PI / 4;
+          g.fillStyle = fg;
+          g.strokeStyle = ln;
+          g.lineWidth = 2;
+          g.beginPath();
+          g.ellipse(gx + Math.cos(t) * 15, gy + Math.sin(t) * 15, 14, 8, t, 0, Math.PI * 2);
+          g.fill();
+          g.stroke();
+        }
+        g.fillStyle = ln;
+        g.fillRect(gx - 3, gy - 3, 6, 6);
+        g.beginPath();
+        g.arc(gx + 32, gy + 32, 4, 0, Math.PI * 2);
+        g.stroke();
+      }
+  };
+  const mega = (bg, fg, ln) => (g) => {
+    g.fillStyle = bg;
+    g.fillRect(0, 0, 256, 256);
+    for (let gy = 0; gy <= 288; gy += 64)
+      for (let gx = -32; gx <= 288; gx += 96) {
+        const ox = gx + ((gy / 64) % 2 ? 48 : 0);
+        [30, 24, 18, 12, 6].forEach((r, k) => {
+          g.fillStyle = k % 2 ? bg : fg;
+          for (const dx of [0, -22, 22]) {
+            const rr = dx ? r * 0.7 : r;
+            g.beginPath();
+            g.arc(ox + dx, gy, rr, Math.PI, 0);
+            g.fill();
+          }
+        });
+        g.strokeStyle = ln;
+        g.lineWidth = 2;
+        g.beginPath();
+        g.moveTo(ox - 50, gy);
+        g.lineTo(ox + 50, gy);
+        g.stroke();
+      }
+  };
+  const kotak = (c1, c2, c3) => (g) => {
+    g.fillStyle = c1;
+    g.fillRect(0, 0, 256, 256);
+    g.globalAlpha = 0.75;
+    g.fillStyle = c2;
+    for (let i = 0; i < 256; i += 64) {
+      g.fillRect(i, 0, 22, 256);
+      g.fillRect(0, i, 256, 22);
+    }
+    g.globalAlpha = 1;
+    g.fillStyle = c3;
+    for (let i = 0; i < 256; i += 64) {
+      g.fillRect(i + 30, 0, 4, 256);
+      g.fillRect(0, i + 30, 256, 4);
+    }
+  };
+  mk('b:batik_parang', 'Batik Parang Sogan', 0.3, parang('#784824', '#e2c48c', '#30200f'));
+  mk('b:batik_parang_hijau', 'Batik Parang Hijau', 0.3, parang('#2e6b3a', '#d8e8b0', '#183a1e'));
+  mk('b:batik_kawung', 'Batik Kawung Nila', 0.3, kawung('#26345c', '#e6dec8', '#141828'));
+  mk('b:batik_kawung_merah', 'Batik Kawung Merah', 0.3, kawung('#a8322a', '#f5d7a0', '#4a1410'));
+  mk('b:batik_kawung_kuning', 'Batik Kawung Kuning', 0.3, kawung('#e8b830', '#fff4d0', '#7a5a10'));
+  mk('b:batik_mega', 'Batik Mega Mendung', 0.4, mega('#285ca0', '#d2e6fa', '#142a5a'));
+  mk('b:lurik', 'Lurik', 0.25, (g) => {
+    g.fillStyle = '#b4966e';
+    g.fillRect(0, 0, 256, 256);
+    let x = 0;
+    const pat = [[3, '#3c281e'], [6, null], [2, '#e6dcbe'], [4, null], [3, '#3c281e'], [12, null], [1, '#e6dcbe'], [5, null]];
+    while (x < 256) for (const [w, c] of pat) {
+      if (c) {
+        g.fillStyle = c;
+        g.fillRect(x, 0, w, 256);
+      }
+      x += w;
+    }
+  });
+  mk('b:sarung_merah', 'Sarung Merah', 0.35, kotak('#7a1c28', '#28264a', '#e6c85a'));
+  mk('b:sarung_hijau', 'Sarung Hijau', 0.35, kotak('#1e463c', '#141e28', '#dcdcc8'));
+  mk('b:sarung_biru', 'Sarung Biru', 0.35, kotak('#32386e', '#781420', '#f0f0f0'));
+  mk('b:songket', 'Songket', 0.15, (g) => {
+    g.fillStyle = '#6e101e';
+    g.fillRect(0, 0, 256, 256);
+    g.strokeStyle = g.fillStyle = '#e6b43c';
+    g.lineWidth = 2;
+    for (let gx = 0; gx <= 256; gx += 32)
+      for (let gy = 0; gy <= 256; gy += 32) {
+        const ox = gx + ((gy / 32) % 2 ? 16 : 0);
+        g.beginPath();
+        g.moveTo(ox, gy - 10);
+        g.lineTo(ox + 10, gy);
+        g.lineTo(ox, gy + 10);
+        g.lineTo(ox - 10, gy);
+        g.closePath();
+        g.stroke();
+        g.fillRect(ox - 2, gy - 2, 4, 4);
+      }
+  });
+  mk('b:poleng', 'Poleng Bali', 0.12, (g) => {
+    for (let x = 0; x < 8; x++) for (let y = 0; y < 8; y++) {
+      g.fillStyle = (x + y) % 2 ? '#191919' : '#f5f5f0';
+      g.fillRect(x * 32, y * 32, 32, 32);
+    }
+  });
 }
 makeBuiltinTextures();
 
