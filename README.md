@@ -41,6 +41,17 @@ Tekan **F1** di aplikasi untuk daftar pintasan keyboard.
 
 Panel **Pustaka** juga berisi 20 figur orang berpakaian khas Indonesia (14 dewasa + 6 anak): batik, lurik, kebaya, sarung, jarik, peci, blangkon, udeng, kerudung, caping, selendang songket, dan seragam SD merah-putih. Pakai untuk mengisi gambar kerja dan render; dari skrip: `sketch.library('warga_joko', x, y)`.
 
+### Manusia realistis (halus)
+
+Bagian **Manusia Realistis (Halus)** berisi 16 figur bermesh halus seperti model Blender: 12 dewasa dan 4 anak, termasuk anak SD berseragam merah-putih. Tiap figur punya 17–35 ribu segitiga dengan bayangan halus dan tanpa garis tepi, kulit sawo matang, dan tinggi rata-rata orang Indonesia.
+
+- Pakaian: baju batik/lurik/kebaya. Motif kainnya dipetakan melingkari badan, lengan, dan kaki, jadi tidak patah di lipatan.
+- Penutup kepala: peci, caping, atau kerudung yang mengikuti bentuk kepala dan membingkai wajah.
+- Alas kaki: sandal selop atau sepatu pantofel.
+- Versi anak dibentuk ulang dengan kepala yang relatif lebih besar. Mesh-nya diambil dari [Quaternius](https://quaternius.com) Universal Base Characters dan Modular Outfits (lisensi CC0).
+
+**File → Impor** kini juga membaca **.glb / .gltf**, termasuk model dari Blender. Warna diambil dari bahan dan tekstur, dan permukaannya tetap halus. Mesh bertulang diimpor dalam pose dasarnya.
+
 ## Pustaka komponen online
 
 Komponen di folder [`library/`](library) bisa dijelajahi dan ditempatkan langsung dari aplikasi (panel kanan → **Pustaka** → **Muat pustaka online**).

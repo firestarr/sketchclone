@@ -1554,3 +1554,63 @@ export function gableRoof(model, box, pitchDeg, overhang, color, grp = null) {
   pushPull(model, f.id, -len);
   return f.solid;
 }
+
+// ---------- Ekspor OBJ + MTL dengan warna, tekstur (nama) dan normal halus ----------
+// opsi: zUp (default true: pertahankan sumbu Z-atas seperti di SketchClone), smooth (rata-ratakan normal bidang 'soft'),
+// mtlName (nama berkas .mtl). Mengembalikan { obj, mtl, materials }. Nama bahan: m_<RRGGBB> atau m_<RRGGBB>_t_<tekstur>.
+export function exportOBJMtl(model, opts = {}) {
+  const zUp = opts.zUp !== false, smooth = opts.smooth !== false, mtlName = opts.mtlName || 'model.mtl';
+  const T = zUp ? (p) => [p[0], p[1], p[2]] : tx;
+  const key6 = (p) => p.map((v) => Math.round(v * 1e5)).join(',');
+  const acc = new Map();
+  if (smooth) {
+    for (const f of model.faces) {
+      if (!f.soft) continue;
+      for (const p of f.pts) {
+        const k = key6(p);
+        const a = acc.get(k) || [0, 0, 0];
+        a[0] += f.n[0]; a[1] += f.n[1]; a[2] += f.n[2];
+        acc.set(k, a);
+      }
+    }
+  }
+  const out = ['# SketchClone (OBJ + MTL, warna per bidang)', `mtllib ${mtlName}`, 'o model'];
+  const mats = new Map();
+  let vi = 1;
+  let cur = null;
+  const hex = (c) => String(c || '#b0b0b0').replace('#', '').toLowerCase().padStart(6, '0').slice(0, 6);
+  for (const f of model.faces) {
+    const col = hex(f.color);
+    const name = 'm_' + col + (f.tex ? '_t_' + String(f.tex).replace(/[^a-z0-9]+/gi, '-') : '');
+    if (!mats.has(name)) mats.set(name, { col, tex: f.tex || null });
+    if (name !== cur) {
+      out.push(`usemtl ${name}`);
+      cur = name;
+    }
+    const tris = triangulateFace(f);
+    const ts = f.texScale || 0.3;
+    for (const p of tris) {
+      const q = T(p);
+      out.push(`v ${q.map(num).join(' ')}`);
+      out.push(`vt ${num((p[0] + p[1]) / ts)} ${num(p[2] / ts)}`);
+      let n = f.n;
+      if (smooth && f.soft) {
+        const a = acc.get(key6(p));
+        const L = a ? Math.hypot(a[0], a[1], a[2]) : 0;
+        if (L > 1e-9) n = [a[0] / L, a[1] / L, a[2] / L];
+      }
+      out.push(`vn ${T(n).map(num).join(' ')}`);
+    }
+    for (let i = 0; i < tris.length; i += 3) {
+      const a = vi + i, b = vi + i + 1, c = vi + i + 2;
+      out.push(`f ${a}/${a}/${a} ${b}/${b}/${b} ${c}/${c}/${c}`);
+    }
+    vi += tris.length;
+  }
+  const mtl = ['# SketchClone materials'];
+  for (const [name, m] of mats) {
+    const r = parseInt(m.col.slice(0, 2), 16) / 255, g = parseInt(m.col.slice(2, 4), 16) / 255, b = parseInt(m.col.slice(4, 6), 16) / 255;
+    mtl.push(`newmtl ${name}`, `Kd ${r.toFixed(4)} ${g.toFixed(4)} ${b.toFixed(4)}`, 'Ka 0 0 0', 'Ks 0 0 0', 'd 1', ...(m.tex ? [`# tex ${m.tex}`] : []), '');
+  }
+  return { obj: out.join('\n') + '\n', mtl: mtl.join('\n') + '\n', materials: [...mats.keys()] };
+}

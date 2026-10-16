@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('api', {
   save: (data, path, forceDialog) => ipcRenderer.invoke('file:save', data, path, forceDialog),
   open: () => ipcRenderer.invoke('file:open'),
   exportFile: (ext, data, name) => ipcRenderer.invoke('file:export', ext, data, name),
+  writeSibling: (base, ext, data) => ipcRenderer.invoke('file:writeSibling', base, ext, data),
   exportBinary: (ext, data, name) => ipcRenderer.invoke('file:exportBinary', ext, data, name),
   importFile: () => ipcRenderer.invoke('file:import'),
   savePdf: (html, name, opts) => ipcRenderer.invoke('pdf:save', html, name, opts),

@@ -7,11 +7,13 @@ import { parse as parseFont } from 'opentype.js';
 import { zipSync, strToU8 } from 'fflate';
 import QRCode from 'qrcode';
 import { LIBRARY, insertLibrary } from './library.js';
+import './manusia.js';
 import * as C from './construct.js';
 import * as PR from './production.js';
 import * as S from './struktur.js';
 import { parseSkp } from './skp.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -5190,6 +5192,15 @@ function renderLibPane() {
   P.append(mkEl('div', { className: 'ttl', style: 'margin-top:16px', textContent: 'Figur Warga Nusantara' }));
   P.append(mkEl('div', { className: 'muted small', textContent: 'Orang berpakaian khas Indonesia (batik, kebaya, sarung, peci, blangkon, kerudung, seragam SD) untuk mengisi gambar & render.' }));
   P.append(mkEl('div', { className: 'libgrid' }, ...Object.entries(LIBRARY).filter(([, it]) => it.grp === 'warga').map(libBtn)));
+  P.append(mkEl('div', { className: 'ttl', style: 'margin-top:16px', textContent: 'Manusia Realistis (Halus)' }));
+  P.append(mkEl('div', { className: 'muted small', textContent: 'Figur berpermukaan halus seperti model Blender (20–35 ribu segitiga, bayangan halus), kulit sawo matang, batik/lurik/sarung, peci & caping. Model .glb/.gltf dari Blender bisa diimpor lewat File → Impor.' }));
+  P.append(mkEl('div', { className: 'libgrid' }, ...Object.entries(LIBRARY).filter(([, it]) => it.grp === 'manusia').map(libBtn)));
+  P.append(mkEl('div', { className: 'ttl', style: 'margin-top:16px', textContent: 'Tokoh Cerita & Properti Kompleks' }));
+  P.append(mkEl('div', { className: 'muted small', textContent: 'Satpam, warga, petugas lapangan (rompi, kartu pengenal), tandon menara, tiang listrik, AC outdoor, motor bebek, kursi plastik.' }));
+  P.append(mkEl('div', { className: 'libgrid' }, ...Object.entries(LIBRARY).filter(([, it]) => it.grp === 'tokoh' || it.grp === 'kompleks').map(libBtn)));
+  P.append(mkEl('div', { className: 'ttl', style: 'margin-top:16px', textContent: 'Figur & Properti Horor' }));
+  P.append(mkEl('div', { className: 'muted small', textContent: 'Peniru (wajah Ibu / wajah asli) dan sandal jepit untuk game horor. Ekspor lewat File → Ekspor OBJ + warna/MTL (untuk game).' }));
+  P.append(mkEl('div', { className: 'libgrid' }, ...Object.entries(LIBRARY).filter(([, it]) => it.grp === 'horor').map(libBtn)));
   P.append(mkEl('div', { className: 'muted small', textContent: 'Klik item lalu klik di model untuk menaruhnya (panah kiri/kanan memutar). Semua salinan item yang sama bertaut: edit satu, semua ikut berubah.' }));
   // pustaka online
   P.append(mkEl('div', { className: 'ttl', style: 'margin-top:16px', textContent: 'Pustaka Online (GitHub)' }));
@@ -5688,6 +5699,7 @@ async function importMesh(given = null) {
   const r = given || (await window.api.importFile());
   if (!r) return;
   if (r.ext === 'skp') return importSkp(r);
+  if (r.ext === 'glb' || r.ext === 'gltf') return importGltf(r);
   const buf = r.data.buffer.slice(r.data.byteOffset, r.data.byteOffset + r.data.byteLength);
   const parts = [];
   try {
@@ -5740,6 +5752,102 @@ async function importMesh(given = null) {
   changed();
   zoomExtents();
   toast(`Diimpor: ${ids.size} bidang${big ? ' (satuan mm dikonversi ke m)' : ''}`);
+}
+
+// ---- Impor glTF/GLB (mis. karakter dari Blender): permukaan halus, warna dari bahan/tekstur/warna titik ----
+// Mesh bertulang diambil dalam pose dasarnya. Tiap segitiga menjadi bidang 'soft' (bayangan halus, tanpa garis tepi).
+async function importGltf(r) {
+  const buf = r.data.buffer.slice(r.data.byteOffset, r.data.byteOffset + r.data.byteLength);
+  let gltf;
+  try {
+    gltf = await new Promise((ok, bad) => new GLTFLoader().parse(r.ext === 'gltf' ? new TextDecoder().decode(r.data) : buf, '', ok, bad));
+  } catch (e) {
+    return toast('Gagal membaca glTF: ' + (e.message || e) + (r.ext === 'gltf' ? ' (pakai .glb atau .gltf dengan data tertanam)' : ''));
+  }
+  const root = gltf.scene;
+  root.updateMatrixWorld(true);
+  // piksel tekstur warna dasar untuk diambil sampelnya per segitiga
+  const pix = new Map();
+  const texPixels = (tex) => {
+    if (!tex || !tex.image) return null;
+    if (!pix.has(tex)) {
+      const im = tex.image, w = im.width, h = im.height;
+      const cv = document.createElement('canvas');
+      cv.width = w;
+      cv.height = h;
+      const cx = cv.getContext('2d', { willReadFrequently: true });
+      cx.drawImage(im, 0, 0);
+      pix.set(tex, { w, h, d: cx.getImageData(0, 0, w, h).data, flipY: tex.flipY });
+    }
+    return pix.get(tex);
+  };
+  const sample = (px, u, v) => {
+    u -= Math.floor(u);
+    v -= Math.floor(v);
+    if (px.flipY) v = 1 - v;
+    const x = Math.min(px.w - 1, Math.floor(u * px.w)), y = Math.min(px.h - 1, Math.floor(v * px.h)), i = (y * px.w + x) * 4;
+    return new THREE.Color().setRGB(px.d[i] / 255, px.d[i + 1] / 255, px.d[i + 2] / 255, THREE.SRGBColorSpace);
+  };
+  const meshes = [];
+  root.traverse((o) => o.isMesh && o.visible && meshes.push(o));
+  let total = 0;
+  for (const o of meshes) total += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3;
+  if (!total) return toast('Berkas tidak berisi geometri');
+  if (total > 250000) return toast(`Terlalu besar (${Math.round(total)} segitiga, maks 250.000)`);
+  const conv = (v) => [v.x, -v.z, v.y]; // Y-atas -> Z-atas, depan glTF (+Z) menjadi -Y
+  const before = new Set(model.faces.map((f) => f.id));
+  const q = (c) => '#' + new THREE.Color(Math.round(c.r * 48) / 48, Math.round(c.g * 48) / 48, Math.round(c.b * 48) / 48).getHexString();
+  const tmp = new THREE.Vector3();
+  for (const o of meshes) {
+    const g = o.geometry, P = g.attributes.position, UV = g.attributes.uv, COL = g.attributes.color;
+    const idx = g.index ? g.index.array : null, n = idx ? idx.length : P.count;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    const matOf = (i) => {
+      if (!Array.isArray(o.material)) return o.material;
+      const gr = g.groups.find((x) => i >= x.start && i < x.start + x.count);
+      return mats[gr ? gr.materialIndex : 0];
+    };
+    const pts = [];
+    for (let j = 0; j < P.count; j++) {
+      if (o.isSkinnedMesh) o.getVertexPosition(j, tmp);
+      else tmp.fromBufferAttribute(P, j);
+      pts.push(conv(tmp.applyMatrix4(o.matrixWorld)).map((x) => Math.round(x * 1e6) / 1e6));
+    }
+    const sid = model.nextId++;
+    for (let i = 0; i < n; i += 3) {
+      const t = [0, 1, 2].map((k) => (idx ? idx[i + k] : i + k));
+      const [a, b, c] = t.map((k) => pts[k]);
+      const nn = V3(b).sub(V3(a)).cross(V3(c).sub(V3(a)));
+      if (nn.lengthSq() < 1e-16) continue;
+      const mat = matOf(i);
+      const col = mat && mat.color ? mat.color.clone() : new THREE.Color('#d6d2c8');
+      const px = mat && mat.map && UV ? texPixels(mat.map) : null;
+      if (px) {
+        const s = new THREE.Color(0, 0, 0);
+        for (const k of t) s.add(sample(px, UV.getX(k), UV.getY(k)));
+        s.add(sample(px, t.reduce((x, k) => x + UV.getX(k), 0) / 3, t.reduce((x, k) => x + UV.getY(k), 0) / 3).multiplyScalar(3));
+        col.multiply(s.multiplyScalar(1 / 6));
+      }
+      if (COL) {
+        const s = new THREE.Color(0, 0, 0);
+        for (const k of t) s.add(new THREE.Color(COL.getX(k), COL.getY(k), COL.getZ(k)));
+        col.multiply(s.multiplyScalar(1 / 3));
+      }
+      const f = G.makeFace(model, [a, b, c], nn, q(col), sid);
+      if (!f) continue;
+      f.soft = true;
+      f.group = editGroup;
+      if (mat && mat.transparent && mat.opacity < 0.99) f.opacity = Math.round(mat.opacity * 100) / 100;
+      model.faces.push(f);
+    }
+  }
+  const ids = new Set(model.faces.filter((f) => !before.has(f.id)).map((f) => f.id));
+  if (!ids.size) return toast('Berkas tidak berisi geometri');
+  G.makeGroup(model, ids, r.name.replace(/\.[^.]+$/, ''), true, editGroup);
+  selection = G.expandSelection(model, ids, editGroup);
+  changed();
+  zoomExtents();
+  toast(`Diimpor: ${ids.size} segitiga halus dari ${meshes.length} mesh`);
 }
 
 // ---- Ekspor Collada (.dae) untuk dibuka di SketchUp ----
@@ -7313,6 +7421,16 @@ const handleMenu = async (cmd, arg) => {
       const base = (filePath ? filePath.split(/[\\/]/).pop().replace(/\.skc$/, '') : 'model');
       const p = await window.api.exportFile('obj', G.exportOBJ(model), base + '.obj');
       p && toast('Ekspor OBJ selesai');
+      break;
+    }
+    case 'exportObjMtl': {
+      const base = (filePath ? filePath.split(/[\\/]/).pop().replace(/\.skc$/, '') : 'model');
+      const r = G.exportOBJMtl(model, { mtlName: base + '.mtl' });
+      const p = await window.api.exportFile('obj', r.obj, base + '.obj');
+      if (p) {
+        await window.api.writeSibling(p, 'mtl', r.mtl);
+        toast('Ekspor OBJ + MTL selesai (' + r.materials.length + ' bahan)');
+      }
       break;
     }
     case 'exportDae': {

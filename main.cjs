@@ -52,10 +52,11 @@ function buildMenu() {
         { label: 'Riwayat Versi...', click: () => send('versions') },
         { label: 'Simpan Sebagai...', accelerator: 'CmdOrCtrl+Shift+S', click: () => send('saveAs') },
         { type: 'separator' },
-        { label: 'Impor SketchUp/OBJ/STL...', accelerator: 'CmdOrCtrl+I', click: () => send('import') },
+        { label: 'Impor SketchUp/glTF/OBJ/STL...', accelerator: 'CmdOrCtrl+I', click: () => send('import') },
         { label: 'Impor Gambar Referensi...', click: () => send('refImage') },
         { label: 'Ekspor ke SketchUp (.dae)...', click: () => send('exportDae') },
         { label: 'Ekspor OBJ...', click: () => send('exportObj') },
+        { label: 'Ekspor OBJ + warna/MTL (untuk game)...', click: () => send('exportObjMtl') },
         { label: 'Ekspor glTF (.glb)...', click: () => send('exportGlb') },
         { label: 'Ekspor Gambar PNG...', accelerator: 'CmdOrCtrl+Alt+P', click: () => send('exportPng') },
         { type: 'separator' },
@@ -522,12 +523,19 @@ ipcMain.handle('fonts:read', (_e, file) => {
 
 ipcMain.handle('file:import', async () => {
   const r = await dialog.showOpenDialog(win, {
-    filters: [{ name: 'Model 3D (SketchUp, OBJ, STL)', extensions: ['skp', 'obj', 'stl'] }],
+    filters: [{ name: 'Model 3D (SketchUp, glTF/GLB, OBJ, STL)', extensions: ['skp', 'glb', 'gltf', 'obj', 'stl'] }],
     properties: ['openFile'],
   });
   if (r.canceled) return null;
   const p = r.filePaths[0];
   return { name: path.basename(p), ext: path.extname(p).slice(1).toLowerCase(), data: fs.readFileSync(p) };
+});
+
+ipcMain.handle('file:writeSibling', (_e, basePath, ext, data) => {
+  if (!/^[a-z0-9]{1,5}$/i.test(String(ext))) return null;
+  const p = String(basePath).replace(/\.[^.\\/]+$/, '') + '.' + ext;
+  fs.writeFileSync(p, Buffer.from(typeof data === 'string' ? data : data));
+  return p;
 });
 
 ipcMain.handle('file:exportBinary', async (_e, ext, data, name) => {
