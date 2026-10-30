@@ -5000,13 +5000,29 @@ canvas.addEventListener(
   'wheel',
   (ev) => {
     ev.preventDefault();
-    const f = Math.exp(ev.deltaY * 0.0012);
-    const nd = Math.max(0.2, Math.min(2500, view.dist * f));
-    const k = nd / view.dist;
+    // roda halus: satu "klik" roda (±100) ≈ 12%; lonjakan besar (touchpad, mode baris) dibatasi agar tidak melompat
+    const dy = Math.max(-240, Math.min(240, ev.deltaY * (ev.deltaMode === 1 ? 33 : ev.deltaMode === 2 ? 400 : 1)));
+    const f = Math.exp(dy * 0.0012);
     const ray = getRay(ev);
     const dir = camDir();
-    const p = rayPlane(ray, view.target, dir) || view.target.clone();
-    view.target.copy(p).addScaledVector(view.target.clone().sub(p), k);
+    // titik tumpuan zoom = permukaan benda di bawah kursor (seperti SketchUp); kosong → tanah; langit → bidang pusat orbit
+    const hit = pickFace(ev);
+    let p = hit ? hit.point.clone() : null;
+    if (!p && !view.ortho && ray.direction.z < -1e-3) {
+      const t = -ray.origin.z / ray.direction.z;
+      if (t > 0 && t < view.dist * 25) p = ray.origin.clone().addScaledVector(ray.direction, t);
+    }
+    if (!p) p = rayPlane(ray, view.target, dir) || view.target.clone();
+    const nd = Math.max(0.2, Math.min(2500, view.dist * f));
+    if (nd === view.dist && dy < 0 && !view.ortho) {
+      // sudah di jarak terdekat: maju terus menembus ke arah kursor (tidak macet)
+      view.target.addScaledVector(ray.direction, 0.15);
+      updateCamera();
+      return;
+    }
+    // kamera & pusat orbit diskalakan terhadap titik tumpuan → titik di bawah kursor tetap di bawah kursor
+    const k = nd / view.dist;
+    view.target.sub(p).multiplyScalar(k).add(p);
     view.dist = nd;
     updateCamera();
   },
