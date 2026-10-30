@@ -27,9 +27,13 @@ Installer belum ditandatangani digital, jadi Windows SmartScreen bisa menampilka
 
 **Produksi (panel kanan → Produksi)** — *Mebel*: kabinet/lemari parametrik, daftar potong otomatis dari papan di model, optimasi tata letak di lembar 2440×1220 (celah gergaji, arah serat), jumlah lembar & biaya, perlengkapan (engsel, handle, sekrup), laporan PDF, Excel, dan DXF untuk CNC. *Cetak 3D*: cek siap cetak (celah, normal terbalik, terlalu tipis, melebihi area cetak), berat filamen, lama & biaya cetak, ekspor STL/3MF dalam mm dengan skala. *Pola datar*: buka benda jadi jaring-jaring dengan garis potong, garis lipat, dan lidah lem — ekspor PDF ukuran asli, SVG untuk laser, atau DXF; plus pembuat kotak kemasan.
 
-**Pengorganisasian** — Grup & Komponen bertaut (bisa bersarang), Salinan cermin bertaut, Tag, Outliner, Adegan + animasi, Sembunyikan/tampilkan, Bidang potong.
+**Pengorganisasian & kerapian** — Grup & Komponen bertaut (bisa bersarang), Salinan cermin bertaut, Tag, Outliner, Adegan + animasi, Sembunyikan/tampilkan, Bidang potong. **Cari Perintah (F3)**: ketik nama perintah, alat, atau isi pustaka lalu Enter. **Isolasi (I)**: hanya objek terpilih yang tampil, tekan I/Esc untuk kembali. **Ratakan & Sebar** (Edit → Ratakan & Sebar): ratakan kiri/tengah/kanan, depan/belakang, bawah/atas, atau sebar dengan jarak sama. **Bersihkan Model** (Edit → Bersihkan Model): hapus tag & tekstur tak terpakai, garis nyasar, bidang rusak/kembar, satukan titik yang hampir berimpit, perbaiki arah bidang terbalik, dan tunjukkan benda yang belum tertutup rapat. **Menu melingkar** (tahan Tab): 8 alat/perintah favorit di sekitar kursor, isinya bisa diatur. **Kunci objek** (gembok di Outliner): tidak bisa dipilih atau diubah, tapi tetap jadi acuan snap. **Info Entitas**: ketik posisi & ukuran (X/Y/Z, bisa proporsional), panjang garis, volume benda tertutup, material. **Statistik model**: segitiga, titik, material, komponen, objek terberat, perkiraan ukuran berkas. **Pintasan keyboard** untuk alat maupun perintah (isolasi, cari perintah, 4 jendela, tema). **Busur derajat**: garis bantu bersudut (tiap 15° atau ketik sudut).
 
-**Tampilan & render** — Gaya (Standar, Sketsa, Arsitek, Monokrom, Kawat, X-Ray, Kartun, Render), bayangan matahari dengan slider jam, bayangan lembut (AO), langit realistis, lampu & mode malam, material bertekstur / mengkilap / logam / kaca, posisi tekstur.
+**Animasi (panel kanan → Animasi, atau Tampilan → Timeline Animasi)** — Timeline dengan **keyframe** seperti Blender: pindah/putar/ubah ukuran grup lalu tekan ◆ Kunci, gerakan di antaranya diisi otomatis dengan transisi halus / linear / pelan di awal / pelan di akhir / lompat; tampil–sembunyi per waktu; anak ikut induknya. **Lintasan**: objek berjalan mengikuti garis/kurva yang digambar (motor, mobil, orang) sambil berbelok. **Roda motor & mobil berputar otomatis** sesuai jarak tempuh. **Pintu & jendela** buka–tutup pada engselnya. **Kamera**: kunci kamera, berjalan di lintasan (walkthrough) atau mengikuti objek. **Tahapan pembangunan** sekali klik: pondasi & kolom → lantai → dinding + kusen → balok → plat → tangga → atap → utilitas, tiap bagian "tumbuh" dari bawah. **Figur manusia bertulang** (16 tulang, skinning di GPU): berjalan (langkah kaki sesuai jarak tempuh), melambai, duduk. Putar dengan Ctrl+Spasi, rekam ke video .webm.
+
+**Detail realistis & Lukis Tekstur** — Figur dan permukaan halus tanpa garis segitiga, dengan warna yang dicampur mulus per titik (belang hilang). Material **kulit** (kilau lembut + pori halus), **rambut** (helai + kilau searah), dan **kain** (serat anyaman, juga di atas batik). Semuanya memakai normal map buatan sendiri dan bisa dimatikan di Gaya → Detail kulit & kain; finishing Kain/Kulit/Rambut juga bisa dipakai di objek apa pun lewat panel Material. Alat **Lukis Tekstur** (seperti Texture Paint di Blender): seret kuas langsung di permukaan grup/komponen (baju, kulit, dinding, kendaraan) dengan warna, ukuran ([ / ]), kekuatan, kekerasan tepi, dan mode hapus. UV dibentangkan otomatis, goresan menyambung melewati sambungan, bisa dibatalkan dengan Ctrl+Z, tersimpan di berkas proyek, dan ikut bergerak saat figur dianimasikan.
+
+**Tampilan & render** — Tampilan 4 jendela (perspektif + atas, depan, kanan), tema gelap, Gaya (Standar, Sketsa, Arsitek, Monokrom, Kawat, X-Ray, Kartun, Render), bayangan matahari dengan slider jam, bayangan lembut (AO), langit realistis, lampu & mode malam, material bertekstur / mengkilap / logam / kaca, posisi tekstur.
 
 **Dokumen & berkas** — Gambar kerja PDF (tampak + dimensi + kop), daftar bahan Excel, **buka berkas SketchUp (.skp 2021+)** lengkap dengan grup & tag, ekspor kembali ke SketchUp (.dae), ekspor DXF / OBJ / STL / glTF / PNG / video, impor OBJ / STL, gambar referensi, simpan otomatis + pemulihan, riwayat versi, template.
 
@@ -51,6 +55,14 @@ Bagian **Manusia Realistis (Halus)** berisi 16 figur bermesh halus seperti model
 - Versi anak dibentuk ulang dengan kepala yang relatif lebih besar. Mesh-nya diambil dari [Quaternius](https://quaternius.com) Universal Base Characters dan Modular Outfits (lisensi CC0).
 
 **File → Impor** kini juga membaca **.glb / .gltf**, termasuk model dari Blender. Warna diambil dari bahan dan tekstur, dan permukaannya tetap halus. Mesh bertulang diimpor dalam pose dasarnya.
+
+### Motor realistis (halus)
+
+Bagian **Motor Realistis (Halus)** berisi 15 motor khas jalanan Indonesia dalam 5 gaya: **matic**, **bebek**, **bebek klasik gaya 90-an**, **sport full-fairing**, dan **motor laki** (sport naked dengan lampu bulat dan mesin bersirip). Panjangnya 1,9–2,1 m dan tiap motor terdiri dari 29–35 ribu bidang.
+
+- **Bodi:** lengkung halus dengan cat mengkilap, dibangun dari penampang yang disambung seperti di Blender.
+- **Roda:** velg cor atau jari-jari kawat, cakram rem depan (sport: cakram depan dan belakang, garpu emas, lengan ayun aluminium).
+- **Kelengkapan:** mesin dengan rumah CVT di kiri, knalpot berpelindung krom di kanan, shock berpegas ulir, lampu, sein, spion, pegangan boncenger, plat nomor hitam, dan standar samping.
 
 ## Pustaka komponen online
 

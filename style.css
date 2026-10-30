@@ -197,3 +197,88 @@ table.rab.rekap input { width: 44px; }
 #tray .protext { width: 100%; box-sizing: border-box; font: 11px "Segoe UI", sans-serif; resize: vertical; }
 #tray .pkgsum { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0; } #tray .pkgsum span { padding: 1px 6px; border-radius: 3px; background: #f1f4f8; } #tray .pkgsum span.on { background: #fff1cc; font-weight: 700; }
 #tray .ckrow { flex-wrap: wrap; } #tray .ckrow .msg { flex: 1 1 calc(100% - 20px); } #tray .ckrow button { margin-left: 14px; }
+
+/* Cari perintah (F3) */
+#cmdPal { position: absolute; top: 60px; left: 50%; transform: translateX(-50%); width: min(560px, calc(100% - 32px)); background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 14px 40px rgba(0,0,0,.25); z-index: 8; overflow: hidden; }
+#cmdIn { width: 100%; box-sizing: border-box; padding: 11px 14px; border: none; border-bottom: 1px solid var(--line); font: inherit; font-size: 14px; outline: none; }
+#cmdList { max-height: 420px; overflow: auto; padding: 4px; }
+#cmdList button { display: flex; justify-content: space-between; align-items: center; gap: 14px; width: 100%; padding: 6px 10px; border: none; background: none; border-radius: 6px; cursor: pointer; font: inherit; text-align: left; }
+#cmdList button.on { background: #e8f0fe; }
+#cmdList small { color: #7b8594; margin-right: 2px; }
+#cmdList kbd, #isoChip button { font: inherit; font-size: 11px; color: #5b6573; }
+#cmdList .muted { padding: 8px 10px; }
+/* Mode isolasi */
+#isoChip { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; align-items: center; padding: 5px 6px 5px 12px; background: #fff7e0; border: 1px solid #e8c766; border-radius: 16px; box-shadow: 0 4px 14px rgba(0,0,0,.12); z-index: 5; font-size: 12px; }
+#isoChip button { padding: 2px 10px; border: 1px solid #e0b94a; border-radius: 12px; background: #fff; cursor: pointer; color: #6b5310; }
+/* Bersihkan Model */
+.clist .crow { display: grid; grid-template-columns: 20px 44px 1fr; align-items: center; gap: 2px 6px; padding: 5px 4px; border-bottom: 1px solid #eef1f4; }
+.clist .crow b { text-align: right; padding-right: 6px; }
+.clist .crow small { grid-column: 3; color: #7b8594; }
+.clist .crow.ok b { color: #2f9e44; }
+.clist .crow.ok span { color: #7b8594; }
+.clist .crow.open { grid-template-columns: 1fr auto; }
+.clist .ctt { margin: 10px 0 4px; font-weight: 600; }
+
+/* Menu melingkar (tahan Tab) */
+#pie { position: absolute; width: 0; height: 0; z-index: 9; }
+#pie .piec { position: absolute; left: -26px; top: -26px; width: 52px; height: 52px; border-radius: 50%; border: 2px dashed rgba(47,111,228,.5); background: rgba(255,255,255,.35); }
+#pie .pieb { position: absolute; transform: translate(-50%, -50%); display: flex; gap: 6px; align-items: center; white-space: nowrap; padding: 5px 11px; border: 1px solid var(--line); border-radius: 16px; background: #fff; box-shadow: 0 4px 14px rgba(0,0,0,.18); cursor: pointer; font: inherit; color: var(--ink); }
+#pie .pieb.on, #pie .pieb:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+#pie .pieb kbd { font: inherit; font-size: 10px; opacity: .65; }
+/* Info entitas & statistik */
+#tray .xyz { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
+#tray .xyz input { min-width: 0; padding: 3px 4px; }
+#tray .xyz input:nth-child(1) { border-bottom: 2px solid #e03131; } #tray .xyz input:nth-child(2) { border-bottom: 2px solid #2f9e44; } #tray .xyz input:nth-child(3) { border-bottom: 2px solid #1971c2; }
+#tray .matv { display: inline-flex; gap: 6px; align-items: center; } #tray .matv i { width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--line); }
+#tray .statrow { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; padding: 2px 0; }
+#tray .statrow span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#tray .warn { margin-top: 6px; padding: 5px 8px; border-radius: 5px; background: #fff3bf; color: #6b5310; }
+/* Kunci di Outliner */
+#tray .orow .lock { border: none; background: none; padding: 0; width: 16px; color: #aab2bd; display: inline-flex; }
+#tray .orow .lock.on { color: #e8590c; }
+.orow.locked > span:last-child { color: var(--muted); font-style: italic; }
+/* Dialog pintasan: judul bagian */
+#keyList .khead { grid-column: 1 / -1; margin: 10px 0 4px; font-weight: 600; }
+#keyList .piesel { width: 100%; }
+/* Tampilan 4 jendela */
+#stage.quad #view { right: auto; bottom: auto; width: 50%; height: 50%; }
+#stage.quad #labels, #stage.quad #grips { right: 50%; bottom: 50%; }
+#quadView { position: absolute; inset: 0; width: 100%; height: 100%; display: block; background: linear-gradient(90deg, transparent calc(50% - 1px), var(--line) calc(50% - 1px), var(--line) calc(50% + 1px), transparent calc(50% + 1px)), linear-gradient(transparent calc(50% - 1px), var(--line) calc(50% - 1px), var(--line) calc(50% + 1px), transparent calc(50% + 1px)); }
+.quadlbl { position: absolute; padding: 1px 8px; border-radius: 10px; background: rgba(255,255,255,.85); border: 1px solid var(--line); font-size: 11px; color: var(--muted); pointer-events: none; z-index: 2; }
+
+/* ===== Tema gelap ===== */
+body.dark { --bg: #1b1e23; --panel: #23272e; --line: #3a414c; --ink: #e2e6ec; --muted: #98a2b2; --accent: #5b93f5; --card: #2b3038; --hover: #313845; --selbg: #263a5e; color-scheme: dark; }
+body.dark :is(#vcb, #help, #ctxmenu, #t3d, .dlg, #cmdPal, #cmdIn, #trayTabs button, #tray button, #tray input:not([type=checkbox]):not([type=range]), #tray select, #tray textarea, .dlg button, .dlg input, .dlg select, .dlg textarea, #t3d button, #recover button, #pane-mat button#matImport, #console button, #scenebar button.on, #tray .kurva, #pie .pieb, #isoChip button) { background: var(--card); color: var(--ink); border-color: var(--line); }
+body.dark :is(#viewbtns button, #sunbar, .quadlbl) { background: rgba(35,39,46,.9); color: var(--ink); border-color: var(--line); }
+body.dark :is(#toolbar button.active, #trayTabs button.on, .orow.on, #cmdList button.on) { background: var(--selbg); color: #cfe0ff; }
+body.dark :is(.orow:hover, #ctxmenu button:hover, #viewbtns button:hover) { background: var(--hover); }
+body.dark :is(#toolbar button, #ctxmenu button, #cmdList button, #tray .orow .eye) { color: var(--ink); }
+body.dark #cmdList small, body.dark .clist .crow small { color: var(--muted); }
+body.dark :is(.clist .crow, #tray .ckrow) { border-bottom-color: #313741; }
+body.dark #isoChip { background: #3d3418; border-color: #8a6d1d; color: #f2dc95; }
+body.dark #tray .warn { background: #3d3418; color: #f2dc95; }
+body.dark #pie .pieb.on, body.dark #pie .pieb:hover { background: var(--accent); color: #fff; }
+body.dark #pie .piec { background: rgba(35,39,46,.4); }
+
+/* Timeline animasi */
+#timeline { position: absolute; left: 10px; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 6px; padding: 5px 8px; background: rgba(255,255,255,.94); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.12); z-index: 4; font-size: 12px; }
+#timeline button { padding: 3px 8px; border: 1px solid var(--line); border-radius: 5px; background: #fff; cursor: pointer; font: inherit; white-space: nowrap; }
+#timeline #tlPlay { min-width: 34px; background: var(--accent); color: #fff; border-color: var(--accent); }
+#timeline #tlTime { font: 12px Consolas, monospace; min-width: 52px; text-align: right; }
+#timeline #tlDur { font: 12px Consolas, monospace; color: var(--muted); }
+#tlTrack { position: relative; flex: 1; min-width: 80px; height: 24px; }
+#tlSlider { position: absolute; inset: 0; width: 100%; margin: 0; }
+#tlMarks { position: absolute; left: 7px; right: 7px; top: 0; height: 8px; pointer-events: none; }
+#tlMarks i { position: absolute; top: -3px; width: 8px; height: 8px; margin-left: -4px; transform: rotate(45deg); background: #e8590c; border: 1px solid #fff; pointer-events: auto; cursor: pointer; }
+#tlMarks i.cam { background: #1971c2; top: 14px; }
+#timeline label { display: inline-flex; gap: 2px; align-items: center; }
+#stage.has-tl #sunbar { bottom: 56px; }
+#tray .abox { margin-top: 10px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; display: grid; gap: 4px; }
+#tray .abox > button { justify-self: start; }
+body.dark #timeline { background: rgba(35,39,46,.95); }
+body.dark #timeline button:not(#tlPlay) { background: var(--card); color: var(--ink); border-color: var(--line); }
+
+/* Lukis tekstur */
+#brushRing { position: absolute; border: 1.5px solid; border-radius: 50%; pointer-events: none; z-index: 4; box-shadow: 0 0 0 1px rgba(255,255,255,.7), inset 0 0 0 1px rgba(0,0,0,.25); }
+#paintDlg .pdsz { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; }
+#paintDlg .pdsz b { font-weight: 500; min-width: 38px; text-align: right; }

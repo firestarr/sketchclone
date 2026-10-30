@@ -40,7 +40,10 @@ function cone(m, cx, cy, z, r, h, color, seg = 12) {
 function wheel(m, cx, y, cz, r, w, color, seg = 16) {
   const pts = [...Array(seg)].map((_, i) => [cx + r * Math.cos((i / seg) * Math.PI * 2), y, cz + r * Math.sin((i / seg) * Math.PI * 2)]);
   const f = face(m, pts, V(0, -1, 0), color);
+  const n0 = m.faces.length - 1;
   G.pushPull(m, f.id, w);
+  const roda = { c: [cx, y + w / 2, cz], ax: [0, 1, 0], r }; // penanda animasi roda berputar
+  for (let i = n0; i < m.faces.length; i++) m.faces[i].roda = roda;
 }
 
 const WOOD = '#9c6b3f', DARK = '#3a2f28', WHITE = '#f4f2ec', FABRIC = '#5c7aa6', GREEN = '#3f7d3a', SKIN = '#e0b08a';
@@ -206,6 +209,7 @@ export function buildFigure(m, s) {
   // ---- kaki
   const thigh = W.hip * 0.47, kneeR = thigh * 0.62, calf = thigh * 0.68, ankleR = thigh * 0.42;
   for (const sx of [-1, 1]) {
+    if (s.noLegs || (s.onlyLeg && s.onlyLeg !== (sx < 0 ? 'L' : 'R'))) continue;   // varian terpisah untuk animasi jalan (tungkai berayun di pinggul)
     const x = sx * legX;
     const prof = [[0, 0], [ankleR, 0.005], [calf, Z.knee * 0.55 - Z.ankle], [kneeR, Z.knee - Z.ankle], [thigh, Z.crotch - Z.ankle - 0.04], [thigh * 1.05, Z.crotch - Z.ankle + 0.03], [0, Z.crotch - Z.ankle + 0.04]];
     if (s.shorts) {
@@ -216,6 +220,7 @@ export function buildFigure(m, s) {
     const fl = (kid ? 0.17 : 0.25) * (kid ? 1 : k);
     rev(m, [x, 0.045 * k, ankleR * 1.25 * 0.75], [0, -1, 0], [[0, 0], [ankleR * 0.9, 0.01], [ankleR * 1.25, fl * 0.3], [ankleR * 1.15, fl * 0.8], [ankleR * 0.6, fl * 0.98], [0, fl]], shoe, { sz: 0.75, seg: 12 });
   }
+  if (s.onlyLeg) return;
   // ---- panggul + badan (bawah: warna celana/kain, atas: baju)
   const shirtBottom = s.tuck ? Z.waist : Z.hip - 0.02 * k;
   rev(m, [0, 0, Z.crotch - 0.03], UP, [[0, 0], [W.hip * 0.75, 0.01], [W.hip, Z.hip - Z.crotch], [W.waist * 1.02, shirtBottom - Z.crotch + 0.04], [0, shirtBottom - Z.crotch + 0.05]], bottom === 'celana' ? bc : (bottom === 'rok' ? bc : skin), { sy: dep });
@@ -389,11 +394,30 @@ export const TOKOH = {
   darmo: { name: 'Pak Darmo (satpam)', h: 1.69, shirt: '#8da0b3', bottom: 'celana', bottomColor: '#1b2733', shoes: '#101216', head: 'topi_satpam', belt: true, tuck: true, longSleeve: true, kumis: true, skin: '#8f5d3a' },
   tini: { name: 'Bu Tini (warung)', female: true, h: 1.52, shirt: '#8e5b73', shirtTex: 'b:batik_kawung_merah', bottom: 'rok', bottomColor: '#4b3a33', head: 'kerudung', headColor: '#5b6b4a', celemek: true, longSleeve: true, shoes: '#3a2f27', skin: '#b6825a' },
   wiryo: { name: 'Pak Wiryo (penghuni lama)', h: 1.60, shirt: '#d6d1c4', bottom: 'sarung', bottomColor: '#4a3f33', bottomTex: 'b:sarung_hijau', head: 'peci', hair: '#c9c5bd', kacamata: true, longSleeve: true, shoes: '#2a2218', skin: '#a77751' },
+  ratih: { name: 'Bu Ratih (C-1)', female: true, h: 1.5, shirt: '#7d8f6b', bottom: 'rok', bottomColor: '#4a3a3f', head: 'kerudung', headColor: '#d9d2c4', longSleeve: true, shoes: '#3a3028', skin: '#b08560' },
+  gito: { name: 'Pak Gito (C-6)', h: 1.66, shirt: '#8a9aa6', bottom: 'sarung', bottomColor: '#3d4a52', bottomTex: 'b:sarung_hijau', head: 'peci', hair: '#3a3430', longSleeve: true, shoes: '#2a2218', skin: '#9a6e4c', kumis: true },
+  sinta: { name: 'Sinta (adm. relokasi)', female: true, h: 1.58, shirt: '#f1efe9', bottom: 'celana', bottomColor: '#2b2f3a', shoes: '#c9c9c4', lanyard: '#1f4f8f', ponytail: true, tas: '#17171a', skin: '#c99468', hair: '#1a1210', longSleeve: true },
+  darto: { name: 'Pak Darto (satpam rusun)', h: 1.68, shirt: '#8a9aa8', bottom: 'celana', bottomColor: '#1d2733', shoes: '#101216', head: 'topi_satpam', belt: true, tuck: true, longSleeve: true, kumis: true, skin: '#8f5d3a' },
+  harun: { name: 'Pak Harun (kepala pemeliharaan)', h: 1.71, shirt: '#2f4256', bottom: 'celana', bottomColor: '#20262e', shoes: '#1a1a1c', belt: true, tuck: true, longSleeve: true, skin: '#a3744f', hair: '#222' },
+  ujang: { name: 'Pria berjaket pemeliharaan', h: 1.66, shirt: '#c9702a', bottom: 'celana', bottomColor: '#2b2f36', shoes: '#2a2218', longSleeve: true, skin: '#9a6c48', hair: '#151515' },
+  marni: { name: 'Bu Marni (205)', female: true, h: 1.52, shirt: '#c46a8a', bottom: 'rok', bottomColor: '#b85d7c', head: 'kerudung', headColor: '#d8c8d0', longSleeve: false, shoes: '#3a2f27', skin: '#b6825a' },
+  slamet: { name: 'Pak Slamet (210)', h: 1.62, shirt: '#cfcabb', bottom: 'sarung', bottomColor: '#4a3f33', bottomTex: 'b:sarung_hijau', head: 'peci', hair: '#d0ccc4', kacamata: true, shoes: '#2a2218', skin: '#a77751' },
+  karyo: { name: 'Pak Karyo (214)', h: 1.64, shirt: '#9fb0a0', bottom: 'celana', bottomColor: '#3a3f46', shoes: '#2a2218', kacamata: true, hair: '#8a8a88', longSleeve: true, skin: '#a97c59' },
+  nining: { name: 'Bu Nining (warung)', female: true, h: 1.55, shirt: '#8e5b73', bottom: 'rok', bottomColor: '#4b3a33', head: 'kerudung', headColor: '#5b6b4a', celemek: true, longSleeve: true, shoes: '#3a2f27', skin: '#b6825a' },
   hendra: { name: 'Pak Hendra (pengelola)', h: 1.72, shirt: '#b9b4a3', shirtTex: 'b:batik_kawung_merah', bottom: 'celana', bottomColor: '#2a2d33', shoes: '#16161a', hair: '#2b2622', kacamata: true, longSleeve: true, belt: true, tuck: true, skin: '#a97c59' },
   polisi: { name: 'Petugas polisi', h: 1.72, shirt: '#7b5d3c', bottom: 'celana', bottomColor: '#3c2f22', shoes: '#0d0d0f', head: 'topi_satpam', belt: true, tuck: true, longSleeve: true, skin: '#9a6a46' },
   sosok: { name: 'Sosok perempuan lansia', female: true, h: 1.5, shirt: '#c9c3b3', bottom: 'rok', bottomColor: '#3b3033', head: 'kerudung', headColor: '#cfc9bd', longSleeve: true, shoes: '#2a2625', skin: '#a89c8c' },
 };
 for (const [k, s] of Object.entries(TOKOH)) LIBRARY['tokoh_' + k] = { name: s.name, icon: s.female ? '👩' : '👨', grp: 'tokoh', build: (m) => buildFigure(m, s) };
+LIBRARY['tokoh_penghuni'] = { name: 'Penghuni (sosok)', icon: '👤', grp: 'tokoh', build: (m) => buildPenghuni(m) };
+LIBRARY['tokoh_penghuni_body'] = { name: 'Penghuni (badan)', icon: '👤', grp: 'tokoh_bagian', build: (m) => buildPenghuni(m, { part: 'body' }) };
+LIBRARY['tokoh_penghuni_kakiL'] = { name: 'Penghuni (kaki kiri)', icon: '🦵', grp: 'tokoh_bagian', build: (m) => buildPenghuni(m, { part: 'legL' }) };
+LIBRARY['tokoh_penghuni_kakiR'] = { name: 'Penghuni (kaki kanan)', icon: '🦵', grp: 'tokoh_bagian', build: (m) => buildPenghuni(m, { part: 'legR' }) };
+for (const [k, s] of Object.entries(TOKOH)) {
+  LIBRARY['tokoh_' + k + '_body'] = { name: s.name + ' (badan)', icon: '🧍', grp: 'tokoh_bagian', build: (m) => buildFigure(m, { ...s, noLegs: true }) };
+  LIBRARY['tokoh_' + k + '_kakiL'] = { name: s.name + ' (kaki kiri)', icon: '🦵', grp: 'tokoh_bagian', build: (m) => buildFigure(m, { ...s, onlyLeg: 'L' }) };
+  LIBRARY['tokoh_' + k + '_kakiR'] = { name: s.name + ' (kaki kanan)', icon: '🦵', grp: 'tokoh_bagian', build: (m) => buildFigure(m, { ...s, onlyLeg: 'R' }) };
+}
 for (const [k, s] of Object.entries(FIGURES)) LIBRARY['warga_' + k] = { name: s.name, icon: s.kid ? '🧒' : s.female ? '👩' : '👨', grp: 'warga', build: (m) => buildFigure(m, s) };
 
 const cache = new Map();
@@ -466,6 +490,42 @@ function pnHand(m, c, side, color, curl = 0.35) {
     rev(m, e, [0, -0.45 * curl - 0.2, -1], [[0.0065, 0], [0.005, L * 0.5], [0, L * 0.55]], '#2a2220', { seg: 6 });
   }
 }
+
+// "Penghuni" (Jangan Buka Unit 608): dewasa tinggi kurus, leher/bahu/lengan sedikit janggal, pakaian rumah lusuh, wajah samar (tanpa luka/darah).
+const PH = { skin: '#a9a396', skinDark: '#7f7a70', shirt: '#8c8576', pants: '#4a463e', hair: '#bdb8ae' };
+export function buildPenghuni(m, opt = {}) {
+  const part = opt.part ?? 'all';
+  const want = (n) => part === 'all' || part === n;
+  const P = PH;
+  for (const [pn, sx] of [['legL', -1], ['legR', 1]]) {
+    if (!want(pn) && !(part === 'body')) continue;
+    if (!want(pn)) continue;
+    const x = sx * 0.09;
+    rev(m, [x, 0, 0.04], UPV, [[0, 0], [0.03, 0.004], [0.036, 0.12], [0.05, 0.4], [0.058, 0.62], [0.064, 0.82], [0, 0.9]], P.pants, { sy: 0.95, seg: 12 });
+    rev(m, [x, 0, 0.04], UPV, [[0, 0], [0.03, 0.004], [0.034, 0.1], [0.04, 0.2], [0, 0.22]], P.skin, { sy: 0.95, seg: 12 });
+    rev(m, [x, 0.04, 0.035], [0, -1, 0], [[0, 0], [0.032, 0.008], [0.04, 0.08], [0.034, 0.18], [0, 0.21]], P.skin, { sz: 0.55, seg: 10 });
+  }
+  if (want('body')) {
+    // badan: kaus lusuh, bahu miring turun, pinggang sempit
+    rev(m, [0, 0, 0.9], UPV, [[0, 0], [0.16, 0], [0.15, 0.2], [0.14, 0.42], [0.185, 0.58], [0.2, 0.64], [0.1, 0.7], [0, 0.72]], P.shirt, { sy: 0.62, seg: 20 });
+    // leher panjang (janggal)
+    rev(m, [0, 0.01, 1.58], UPV, [[0, 0], [0.05, 0], [0.042, 0.1], [0.04, 0.2], [0.05, 0.26], [0, 0.27]], P.skin, { sy: 0.95, seg: 14 });
+    // kepala agak memanjang, miring ke depan; wajah samar (cekungan dangkal, tanpa mata/mulut rinci)
+    const hh = 0.24, chin = 1.82, rw = 0.075;
+    const prof = [[0, 0], [rw * 0.45, hh * 0.02], [rw * 0.85, hh * 0.2], [rw, hh * 0.5], [rw * 0.9, hh * 0.8], [rw * 0.5, hh * 0.96], [0, hh]];
+    rev(m, [0, -0.02, chin], UPV, prof, P.skin, { sx: 0.9, sy: 1.1, seg: 20 });
+    for (const sx of [-1, 1]) rev(m, [sx * rw * 0.38, -rw * 0.98, chin + hh * 0.56], UPV, [[0, 0], [0.02, 0.0], [0.02, 0.012], [0, 0.014]], P.skinDark, { sx: 1.1, sy: 0.4, seg: 8 });
+    rev(m, [0, 0.0, chin + 0.02], UPV, [[0, 0], [rw * 1.02, hh * 0.45], [rw * 1.05, hh * 0.74], [rw * 0.6, hh * 1.02], [0, hh * 1.05]], P.hair, { sx: 0.95, sy: 1.15, seg: 20 });
+    for (let k = 0; k < 9; k++) strand(m, [(k - 4) * 0.014, 0.05, chin + hh * 0.8], [(k - 4) * 0.02, 0.05, -1], 0.5 + (k % 3) * 0.1, 0.012, 0.004, P.hair);
+    // lengan panjang (hampir menyentuh lutut), tangan besar
+    for (const sx of [-1, 1]) {
+      const c = [sx * 0.2, 0, 1.52];
+      rev(m, c, [sx * 0.12, 0, -1], [[0, -0.02], [0.05, 0], [0.044, 0.25], [0.036, 0.5], [0.03, 0.72], [0.034, 0.8], [0, 0.82]], P.shirt, { seg: 12 });
+      rev(m, [c[0] + sx * 0.1, c[1], c[2] - 0.78], [0, 0, -1], [[0.03, 0], [0.04, 0.05], [0.036, 0.16], [0.02, 0.22], [0, 0.24]], P.skin, { seg: 10, sy: 0.7 });
+    }
+  }
+}
+
 export function buildPeniru(m, opt = {}) {
   const part = opt.part ?? 'all', face = opt.face ?? 'ibu';
   const P = PN;
@@ -778,3 +838,384 @@ export function buildMotorBebek(m, o = {}) {
 LIBRARY.motor_bebek = { name: 'Motor bebek (merah)', icon: '🏍️', grp: 'kompleks', build: (m) => buildMotorBebek(m) };
 LIBRARY.motor_bebek_hitam = { name: 'Motor bebek (hitam)', icon: '🏍️', grp: 'kompleks', build: (m) => buildMotorBebek(m, { color: '#202225' }) };
 LIBRARY.motor_bebek_biru = { name: 'Motor bebek (biru)', icon: '🏍️', grp: 'kompleks', build: (m) => buildMotorBebek(m, { color: '#2a4f8f' }) };
+
+// ============================================================================
+// Perabot rumah & rusun Indonesia (grup 'perabot'): kasur berangka, meja, kursi, bangku, lemari, rak besi, peti, kardus, galon,
+// tong, konter, televisi, radio, perkakas. Dipakai game "Jangan Buka Unit 608". Menghadap -Y (depan di -Y), alas z = 0, berpusat di x/y.
+// Warna penanda (dipetakan ke tekstur game oleh pemuat OBJ): PW kayu, PWD kayu tua, PFD kain gelap, PK kardus, PM logam. Warna lain = warna datar.
+// ============================================================================
+const PW = '#b08a5a', PWD = '#5a3d27', PF = '#d6cfba', PFD = '#4b5563', PK = '#a0825a', PM = '#8d9296';   // PF: kain polos krem (warna datar, bukan tekstur)
+const BRASS = '#c9a227';
+const bx = (m, x0, y0, z0, x1, y1, z1, c) => box(m, Math.min(x0, x1), Math.min(y0, y1), Math.min(z0, z1), Math.abs(x1 - x0), Math.abs(y1 - y0), Math.abs(z1 - z0), c);
+// benda tumpul (elipsoid) berpusat di (x,y,z) dengan setengah-sumbu rx, ry, rz
+const blob = (m, x, y, z, rx, ry, rz, c, seg = 14) => rev(m, [x, y, z], [0, 0, 1], ell(1, -Math.PI / 2, Math.PI / 2, 8), c, { seg, sx: rx, sy: ry, sz: rz });
+// silinder pejal dari (x,y,z) searah dir sepanjang len
+const rod = (m, x, y, z, dir, r, len, c, seg = 12) => rev(m, [x, y, z], dir, [[0, 0], [r, 0], [r, len], [0, len]], c, { seg });
+const X_ = [1, 0, 0], Y_ = [0, 1, 0], Z_ = [0, 0, 1];
+
+// Kasur berangka kayu 1,0 x 2,0 m: kaki, rangka pinggir, dipan, papan kepala berpanel, papan kaki, kasur, bantal, selimut berlipat.
+export function buildKasur(m, o = {}) {
+  const x0 = -0.5, x1 = 0.5, y0 = -1.0, y1 = 1.0, fr = o.wood ?? PWD;
+  for (const [x, y] of [[x0, y0], [x1 - 0.06, y0]]) bx(m, x, y, 0, x + 0.06, y + 0.06, 0.34, fr);        // kaki depan
+  bx(m, x0, y1 - 0.06, 0, x1, y1, 1.0, fr);                                                              // papan kepala
+  bx(m, x0 - 0.012, y1 - 0.075, 0.98, x1 + 0.012, y1 + 0.01, 1.03, PW);                                  // tutup papan kepala
+  bx(m, x0 + 0.08, y1 - 0.08, 0.5, x1 - 0.08, y1 - 0.06, 0.93, PW);                                      // panel tengah (menonjol)
+  for (let k = 0; k < 4; k++) bx(m, x0 + 0.12 + k * 0.2, y1 - 0.075, 0.12, x0 + 0.17 + k * 0.2, y1 - 0.06, 0.44, PW);
+  bx(m, x0, y0, 0.0, x1, y0 + 0.045, 0.52, fr);                                                          // papan kaki
+  bx(m, x0 - 0.01, y0 - 0.01, 0.5, x1 + 0.01, y0 + 0.055, 0.55, PW);
+  bx(m, x0, y0 + 0.045, 0.18, x0 + 0.05, y1 - 0.06, 0.3, fr);                                            // rangka kiri
+  bx(m, x1 - 0.05, y0 + 0.045, 0.18, x1, y1 - 0.06, 0.3, fr);                                            // rangka kanan
+  bx(m, x0 + 0.05, y0 + 0.045, 0.26, x1 - 0.05, y1 - 0.06, 0.3, PW);                                     // dipan
+  bx(m, x0 + 0.06, y0 + 0.06, 0.3, x1 - 0.06, y1 - 0.08, 0.46, PF);                                      // kasur
+  bx(m, x0 + 0.055, y0 + 0.055, 0.375, x1 - 0.055, y1 - 0.075, 0.385, '#a8a290');                        // jahitan tepi
+  if (o.polos) {
+    bx(m, x0 + 0.06, y0 + 0.06, 0.46, x1 - 0.06, y1 - 0.08, 0.47, o.sprei ?? '#b6b0a0');                  // seprai tipis
+  } else {
+    const sel = o.selimut ?? PFD, ys = y0 + 1.25;
+    bx(m, x0 + 0.05, y0 + 0.05, 0.46, x1 - 0.05, ys, 0.49, sel);                                          // selimut di atas
+    bx(m, x0 + 0.045, y0 + 0.05, 0.31, x0 + 0.06, ys, 0.49, sel);                                          // juntai kiri
+    bx(m, x1 - 0.06, y0 + 0.05, 0.31, x1 - 0.045, ys, 0.49, sel);                                          // juntai kanan
+    bx(m, x0 + 0.06, y0 + 0.045, 0.31, x1 - 0.06, y0 + 0.058, 0.49, sel);                                  // juntai kaki
+    rod(m, x0 + 0.06, ys + 0.03, 0.52, X_, 0.045, x1 - x0 - 0.12, sel, 12);                                // lipatan selimut
+  }
+  blob(m, -0.22, y1 - 0.3, 0.53, 0.22, 0.15, 0.075, PF);                                                // bantal
+  if (!o.satuBantal) blob(m, 0.2, y1 - 0.3, 0.53, 0.22, 0.15, 0.075, PF);
+}
+LIBRARY.kasur = { name: 'Kasur berangka', icon: '🛏️', grp: 'perabot', build: (m) => buildKasur(m) };
+LIBRARY.kasur_polos = { name: 'Kasur berangka (polos)', icon: '🛏️', grp: 'perabot', build: (m) => buildKasur(m, { polos: true, satuBantal: true }) };
+LIBRARY.kasur_lipat = { name: 'Kasur berangka (selimut terlipat)', icon: '🛏️', grp: 'perabot', build: (m) => buildKasur(m, { selimut: '#7a6b58', satuBantal: true }) };
+
+// Kasur busa di lantai (tanpa rangka), dan kasur digulung diikat tali.
+export function buildKasurLantai(m) {
+  bx(m, -0.45, -0.95, 0, 0.45, 0.95, 0.14, PF);
+  bx(m, -0.455, -0.955, 0.065, 0.455, 0.955, 0.075, '#a8a290');
+  bx(m, -0.4, -0.9, 0.14, 0.4, 0.2, 0.155, PFD);
+  blob(m, 0, 0.7, 0.19, 0.2, 0.14, 0.06, PF);
+}
+LIBRARY.kasur_lantai = { name: 'Kasur busa di lantai', icon: '🛏️', grp: 'perabot', build: (m) => buildKasurLantai(m) };
+export function buildKasurGulung(m) {
+  rod(m, 0, -0.85, 0.24, Y_, 0.24, 1.7, PF, 16);
+  for (const y of [-0.55, 0.0, 0.55]) rev(m, [0, y - 0.015, 0.24], Y_, [[0.25, 0], [0.25, 0.03]], '#8a6a3a', { seg: 16 });
+  rev(m, [0, 0.85, 0.24], Y_, [[0, 0], [0.19, 0], [0.19, 0.01], [0.14, 0.012], [0.09, 0.012], [0.05, 0.014], [0, 0.014]], '#a8a290', { seg: 16 });
+}
+LIBRARY.kasur_gulung = { name: 'Kasur gulung', icon: '🛏️', grp: 'perabot', build: (m) => buildKasurGulung(m) };
+
+// Meja kayu 1,2 x 0,6 x 0,75: papan atas, bingkai bawah, empat kaki, laci dengan kenop kuningan.
+export function buildMejaKayu(m, o = {}) {
+  const W = o.w ?? 1.2, D = o.d ?? 0.6, H = o.h ?? 0.75, a = W / 2, b = D / 2, top = o.top ?? PW, leg = o.leg ?? PWD;
+  bx(m, -a, -b, H - 0.035, a, b, H, top);
+  bx(m, -a - 0.01, -b - 0.01, H - 0.045, a + 0.01, b + 0.01, H - 0.035, leg);
+  for (const [x, y] of [[-a + 0.03, -b + 0.03], [a - 0.08, -b + 0.03], [-a + 0.03, b - 0.08], [a - 0.08, b - 0.08]]) bx(m, x, y, 0, x + 0.05, y + 0.05, H - 0.045, leg);
+  bx(m, -a + 0.08, -b + 0.03, H - 0.12, a - 0.08, -b + 0.05, H - 0.045, leg);
+  bx(m, -a + 0.08, b - 0.05, H - 0.12, a - 0.08, b - 0.03, H - 0.045, leg);
+  bx(m, -a + 0.03, -b + 0.08, H - 0.12, -a + 0.05, b - 0.08, H - 0.045, leg);
+  bx(m, a - 0.05, -b + 0.08, H - 0.12, a - 0.03, b - 0.08, H - 0.045, leg);
+  if (o.laci !== false) {
+    bx(m, -0.22, -b + 0.012, H - 0.115, 0.22, -b + 0.034, H - 0.05, PW);
+    rod(m, 0, -b + 0.012, H - 0.082, [0, -1, 0], 0.014, 0.025, BRASS, 8);
+  }
+}
+LIBRARY.meja_kayu = { name: 'Meja kayu', icon: '▭', grp: 'perabot', build: (m) => buildMejaKayu(m) };
+LIBRARY.meja_kecil = { name: 'Meja kecil', icon: '▭', grp: 'perabot', build: (m) => buildMejaKayu(m, { w: 0.8, d: 0.5, h: 0.72 }) };
+LIBRARY.meja_tua = { name: 'Meja kayu tua', icon: '▭', grp: 'perabot', build: (m) => buildMejaKayu(m, { w: 1.4, d: 0.7, h: 0.76, top: '#7a5a3a' }) };
+
+// Meja bengkel: papan tebal di atas rangka besi, rak bawah, catok di sudut.
+export function buildMejaBengkel(m) {
+  const a = 0.9, b = 0.4, H = 0.9;
+  bx(m, -a, -b, H - 0.06, a, b, H, PWD);
+  for (const [x, y] of [[-a + 0.04, -b + 0.04], [a - 0.08, -b + 0.04], [-a + 0.04, b - 0.08], [a - 0.08, b - 0.08]]) bx(m, x, y, 0, x + 0.04, y + 0.04, H - 0.06, PM);
+  bx(m, -a + 0.04, -b + 0.04, 0.2, a - 0.04, b - 0.04, 0.24, PWD);                                   // rak bawah
+  bx(m, -a + 0.04, -b + 0.04, H - 0.14, a - 0.04, -b + 0.08, H - 0.06, PM);
+  bx(m, -a + 0.04, b - 0.08, H - 0.14, a - 0.04, b - 0.04, H - 0.06, PM);
+  bx(m, a - 0.22, -b - 0.03, H, a - 0.04, -b + 0.12, H + 0.1, '#3a3d40');                              // catok: badan
+  bx(m, a - 0.2, -b - 0.1, H + 0.04, a - 0.06, -b - 0.03, H + 0.1, '#2c2f31');                         // rahang
+  rod(m, a - 0.13, -b - 0.1, H + 0.07, [0, -1, 0], 0.012, 0.18, PM, 8);
+  bx(m, -0.5, -0.1, H, -0.25, 0.1, H + 0.05, '#7d1f1a');                                                // kotak kecil
+  rod(m, 0.1, 0.0, H, X_, 0.016, 0.3, PM, 8);                                                          // obeng/besi
+}
+LIBRARY.meja_bengkel = { name: 'Meja bengkel', icon: '🔧', grp: 'perabot', build: (m) => buildMejaBengkel(m) };
+
+// Kursi kayu: dudukan, empat kaki + palang, sandaran bersilang tiga bilah.
+export function buildKursiKayu(m, o = {}) {
+  const c = o.col ?? PW, k = PWD;
+  bx(m, -0.21, -0.21, 0.43, 0.21, 0.2, 0.465, c);
+  for (const [x, y] of [[-0.2, -0.2], [0.165, -0.2], [-0.2, 0.165], [0.165, 0.165]]) bx(m, x, y, 0, x + 0.035, y + 0.035, 0.43, k);
+  for (const x of [-0.2, 0.165]) bx(m, x + 0.005, -0.16, 0.16, x + 0.03, 0.16, 0.19, k);
+  bx(m, -0.16, -0.19, 0.16, 0.16, -0.165, 0.19, k);
+  bx(m, -0.2, 0.165, 0.465, -0.165, 0.2, 0.9, k);
+  bx(m, 0.165, 0.165, 0.465, 0.2, 0.2, 0.9, k);
+  for (const z of [0.58, 0.69, 0.8]) bx(m, -0.165, 0.17, z, 0.165, 0.195, z + 0.07, c);
+  bx(m, -0.21, 0.155, 0.89, 0.21, 0.21, 0.93, c);
+}
+LIBRARY.kursi_kayu = { name: 'Kursi kayu', icon: '🪑', grp: 'perabot', build: (m) => buildKursiKayu(m) };
+LIBRARY.kursi_tua = { name: 'Kursi kayu tua', icon: '🪑', grp: 'perabot', build: (m) => buildKursiKayu(m, { col: '#7a5a3a' }) };
+
+// Bangku panjang dari dua papan di atas dua rangka kaki.
+export function buildBangku(m) {
+  const a = 0.6;
+  bx(m, -a, -0.17, 0.43, a, -0.01, 0.465, PW);
+  bx(m, -a, 0.01, 0.43, a, 0.17, 0.465, PW);
+  for (const x of [-a + 0.07, a - 0.1]) {
+    bx(m, x, -0.15, 0.0, x + 0.03, -0.12, 0.43, PWD);
+    bx(m, x, 0.12, 0.0, x + 0.03, 0.15, 0.43, PWD);
+    bx(m, x, -0.15, 0.38, x + 0.03, 0.15, 0.43, PWD);
+    bx(m, x, -0.12, 0.15, x + 0.03, 0.12, 0.18, PWD);
+  }
+}
+LIBRARY.bangku_kayu = { name: 'Bangku kayu', icon: '🪑', grp: 'perabot', build: (m) => buildBangku(m) };
+
+// Lemari pakaian kayu dua pintu: kaki, badan, dua pintu berpanel timbul, gagang kuningan, mahkota.
+export function buildLemariPakaian(m, o = {}) {
+  const W = o.w ?? 1.1, D = o.d ?? 0.55, H = o.h ?? 1.9, a = W / 2, b = D / 2, bd = o.body ?? PWD, dr = o.door ?? PW;
+  for (const [x, y] of [[-a + 0.02, -b + 0.02], [a - 0.07, -b + 0.02], [-a + 0.02, b - 0.07], [a - 0.07, b - 0.07]]) bx(m, x, y, 0, x + 0.05, y + 0.05, 0.09, bd);
+  bx(m, -a, -b, 0.09, a, b, H - 0.07, bd);
+  bx(m, -a - 0.03, -b - 0.03, H - 0.07, a + 0.03, b + 0.02, H - 0.02, dr);
+  bx(m, -a - 0.015, -b - 0.015, H - 0.02, a + 0.015, b + 0.01, H, dr);
+  bx(m, -a - 0.015, -b - 0.01, 0.09, a + 0.015, -b + 0.02, 0.15, dr);                                      // papan bawah
+  const dw = (W - 0.06) / 2;
+  for (const s of [-1, 1]) {
+    const x0 = s < 0 ? -a + 0.025 : 0.004, x1 = x0 + dw - 0.004;
+    bx(m, x0, -b - 0.025, 0.16, x1, -b, H - 0.1, dr);
+    const pz = (H - 0.26) / 2;
+    bx(m, x0 + 0.06, -b - 0.04, 0.24, x1 - 0.06, -b - 0.025, 0.24 + pz - 0.1, bd);                          // panel bawah
+    bx(m, x0 + 0.06, -b - 0.04, 0.24 + pz + 0.0, x1 - 0.06, -b - 0.025, H - 0.18, bd);                      // panel atas
+    const hx = s < 0 ? x1 - 0.055 : x0 + 0.045;
+    bx(m, hx, -b - 0.045, H * 0.5 - 0.1, hx + 0.012, -b - 0.025, H * 0.5 + 0.1, BRASS);                     // gagang
+  }
+}
+LIBRARY.lemari_pakaian = { name: 'Lemari pakaian', icon: '▯', grp: 'perabot', build: (m) => buildLemariPakaian(m) };
+LIBRARY.lemari_pendek = { name: 'Lemari rendah', icon: '▯', grp: 'perabot', build: (m) => buildLemariPakaian(m, { w: 1.2, d: 0.45, h: 1.0 }) };
+
+// Lemari besi (loker/arsip): badan logam, dua pintu, kisi udara, gagang, kunci.
+export function buildLemariBesi(m, o = {}) {
+  const W = o.w ?? 0.9, D = o.d ?? 0.45, H = o.h ?? 1.8, a = W / 2, b = D / 2, c = o.col ?? PM;
+  bx(m, -a, -b, 0.04, a, b, H, c);
+  for (const [x, y] of [[-a + 0.02, -b + 0.02], [a - 0.05, -b + 0.02], [-a + 0.02, b - 0.05], [a - 0.05, b - 0.05]]) bx(m, x, y, 0, x + 0.03, y + 0.03, 0.04, '#2c2f31');
+  bx(m, -0.004, -b - 0.012, 0.1, 0.004, -b, H - 0.06, '#2a2c2e');                                          // celah pintu
+  for (const s of [-1, 1]) {
+    for (let k = 0; k < 5; k++) bx(m, s * a * 0.5 - 0.1, -b - 0.01, H - 0.3 - k * 0.04, s * a * 0.5 + 0.1, -b, H - 0.275 - k * 0.04, '#2a2c2e');   // kisi
+    bx(m, s * 0.05 - 0.01, -b - 0.03, H * 0.5 - 0.12, s * 0.05 + 0.01, -b - 0.012, H * 0.5 + 0.12, '#cfd2d4');         // gagang
+  }
+  bx(m, -0.012, -b - 0.026, H * 0.5 - 0.02, 0.012, -b - 0.012, H * 0.5 + 0.02, BRASS);
+  bx(m, -a - 0.005, -b - 0.005, H, a + 0.005, b + 0.005, H + 0.012, c);
+}
+LIBRARY.lemari_besi = { name: 'Lemari besi', icon: '🗄️', grp: 'perabot', build: (m) => buildLemariBesi(m) };
+LIBRARY.lemari_besi_hijau = { name: 'Lemari besi (hijau)', icon: '🗄️', grp: 'perabot', build: (m) => buildLemariBesi(m, { col: '#5d7a62' }) };
+
+// Rak besi bersusun lima: tiang siku, papan logam, tali silang di belakang, kardus dan kaleng di rak.
+export function buildRakBesi(m) {
+  const a = 0.6, b = 0.25, H = 1.8;
+  for (const [x, y] of [[-a, -b], [a - 0.04, -b], [-a, b - 0.04], [a - 0.04, b - 0.04]]) bx(m, x, y, 0, x + 0.04, y + 0.04, H, '#4a6fa5');
+  for (const z of [0.12, 0.5, 0.88, 1.26, 1.64]) {
+    bx(m, -a, -b, z, a, b, z + 0.02, PM);
+    bx(m, -a, -b, z - 0.03, a, -b + 0.012, z + 0.02, PM);
+    bx(m, -a, b - 0.012, z - 0.03, a, b, z + 0.02, PM);
+  }
+  bx(m, -0.55, -0.2, 0.14, -0.15, 0.18, 0.46, PK);
+  bx(m, 0.02, -0.18, 0.14, 0.5, 0.2, 0.4, PK);
+  bx(m, -0.5, -0.15, 0.52, -0.1, 0.17, 0.78, PK);
+  rod(m, 0.3, 0.0, 0.52, Z_, 0.09, 0.2, '#9a3a2a', 12);
+  rod(m, 0.12, 0.05, 0.9, Z_, 0.07, 0.16, '#d8d2b0', 12);
+  bx(m, -0.45, -0.18, 0.9, 0.0, 0.18, 1.2, PK);
+  bx(m, 0.25, -0.2, 1.28, 0.55, 0.2, 1.5, PK);
+}
+LIBRARY.rak_besi = { name: 'Rak besi bersusun', icon: '🗄️', grp: 'perabot', build: (m) => buildRakBesi(m) };
+
+// Rak kayu terbuka (rak dagangan / sepatu / oli): dua sisi, lima papan, panel belakang.
+export function buildRakKayu(m, o = {}) {
+  const W = o.w ?? 1.0, D = o.d ?? 0.35, H = o.h ?? 1.8, a = W / 2, b = D / 2, n = o.n ?? 5;
+  bx(m, -a, -b, 0, -a + 0.03, b, H, PWD);
+  bx(m, a - 0.03, -b, 0, a, b, H, PWD);
+  bx(m, -a + 0.03, b - 0.01, 0.06, a - 0.03, b, H - 0.02, PWD);
+  for (let k = 0; k < n; k++) bx(m, -a + 0.03, -b + 0.01, 0.08 + k * ((H - 0.12) / (n - 1)), a - 0.03, b - 0.01, 0.1 + k * ((H - 0.12) / (n - 1)), PW);
+}
+LIBRARY.rak_kayu = { name: 'Rak kayu', icon: '🗄️', grp: 'perabot', build: (m) => buildRakKayu(m) };
+LIBRARY.rak_sepatu = { name: 'Rak sepatu', icon: '🗄️', grp: 'perabot', build: (m) => buildRakKayu(m, { w: 0.7, d: 0.3, h: 0.7, n: 3 }) };
+
+// Peti kayu berpapan renggang dengan tiang sudut dan tutup agak terbuka.
+export function buildPeti(m) {
+  const a = 0.35, b = 0.25, H = 0.45;
+  for (const [x, y] of [[-a, -b], [a - 0.05, -b], [-a, b - 0.05], [a - 0.05, b - 0.05]]) bx(m, x, y, 0, x + 0.05, y + 0.05, H, PWD);
+  for (let k = 0; k < 3; k++) {
+    const z = 0.04 + k * 0.14;
+    bx(m, -a + 0.05, -b - 0.01, z, a - 0.05, -b + 0.015, z + 0.12, PW);
+    bx(m, -a + 0.05, b - 0.015, z, a - 0.05, b + 0.01, z + 0.12, PW);
+    bx(m, -a - 0.01, -b + 0.05, z, -a + 0.015, b - 0.05, z + 0.12, PW);
+    bx(m, a - 0.015, -b + 0.05, z, a + 0.01, b - 0.05, z + 0.12, PW);
+  }
+  bx(m, -a + 0.05, -b + 0.05, 0.03, a - 0.05, b - 0.05, 0.05, PWD);
+  for (let k = 0; k < 3; k++) bx(m, -a, -b + 0.02 + k * 0.16, H, a, -b + 0.15 + k * 0.16, H + 0.025, PW);
+  bx(m, -a + 0.1, -b, H + 0.025, -a + 0.15, b, H + 0.05, PWD);
+}
+LIBRARY.peti_kayu = { name: 'Peti kayu', icon: '📦', grp: 'perabot', build: (m) => buildPeti(m) };
+
+// Kardus bekas: badan, empat lipatan tutup setengah terbuka, lakban, label.
+export function buildKardus(m, o = {}) {
+  const a = (o.w ?? 0.5) / 2, b = (o.d ?? 0.4) / 2, H = o.h ?? 0.35;
+  bx(m, -a, -b, 0, a, b, H, PK);
+  bx(m, -a - 0.005, -b - 0.005, H * 0.45, a + 0.005, b + 0.005, H * 0.5, '#8d7048');
+  bx(m, -0.03, -b - 0.004, H * 0.15, 0.03, -b, H - 0.01, '#d8c9a0');
+  bx(m, -a + 0.05, -b - 0.004, H * 0.55, -a + 0.2, -b, H * 0.8, '#e6e1d4');
+  bx(m, -a, -b - 0.12, H, a, -b, H + 0.012, PK);
+  bx(m, -a, b, H, a, b + 0.12, H + 0.012, PK);
+  bx(m, -a - 0.12, -b, H, -a, b, H + 0.012, PK);
+  bx(m, a, -b, H, a + 0.12, b, H + 0.012, PK);
+}
+LIBRARY.kardus_sedang = { name: 'Kardus bekas', icon: '📦', grp: 'perabot', build: (m) => buildKardus(m) };
+LIBRARY.kardus_kecil = { name: 'Kardus kecil', icon: '📦', grp: 'perabot', build: (m) => buildKardus(m, { w: 0.36, d: 0.28, h: 0.24 }) };
+LIBRARY.kardus_besar = { name: 'Kardus besar', icon: '📦', grp: 'perabot', build: (m) => buildKardus(m, { w: 0.7, d: 0.5, h: 0.5 }) };
+
+// Galon air isi ulang 19 L dan tong drum bergelang.
+export function buildGalon(m) {
+  rev(m, [0, 0, 0], Z_, [[0, 0], [0.12, 0], [0.135, 0.03], [0.135, 0.34], [0.12, 0.4], [0.06, 0.44], [0.05, 0.47], [0.05, 0.5], [0, 0.5]], '#3d78b8', { seg: 18 });
+  rev(m, [0, 0, 0.47], Z_, [[0.058, 0], [0.058, 0.04], [0, 0.04]], '#e8ecee', { seg: 14 });
+  rev(m, [0, 0, 0.18], Z_, [[0.137, 0], [0.137, 0.06]], '#e8ecee', { seg: 18 });
+}
+LIBRARY.galon = { name: 'Galon air', icon: '🫙', grp: 'perabot', build: (m) => buildGalon(m) };
+export function buildTong(m, o = {}) {
+  const c = o.col ?? '#4a6a50', R = 0.29, H = 0.88;
+  rev(m, [0, 0, 0], Z_, [[0, 0], [R - 0.02, 0], [R, 0.03], [R, H - 0.03], [R - 0.02, H], [0, H]], c, { seg: 20 });
+  for (const z of [0.08, 0.3, 0.58, H - 0.1]) rev(m, [0, 0, z], Z_, [[R + 0.008, 0], [R + 0.008, 0.035]], '#2e3f33', { seg: 20 });
+  rev(m, [0, 0, H], Z_, [[0, 0], [R - 0.03, 0], [R - 0.03, 0.012], [0, 0.012]], '#2e3f33', { seg: 20 });
+}
+LIBRARY.tong_drum = { name: 'Tong drum', icon: '🛢️', grp: 'perabot', build: (m) => buildTong(m) };
+
+// Konter / meja jual: papan atas menjorok, panel depan bilah tegak, rak di bawah.
+export function buildKonter(m, o = {}) {
+  const W = o.w ?? 2.0, D = o.d ?? 0.7, H = o.h ?? 1.0, a = W / 2, b = D / 2;
+  bx(m, -a - 0.03, -b - 0.05, H - 0.05, a + 0.03, b + 0.03, H, PW);
+  bx(m, -a, -b, 0.06, a, b, H - 0.05, PWD);
+  const n = Math.round(W / 0.2);
+  for (let k = 0; k < n; k++) bx(m, -a + 0.012 + k * (W - 0.024) / n, -b - 0.018, 0.08, -a + (k + 1) * (W - 0.024) / n - 0.004 + 0.012, -b, H - 0.07, PW);
+  bx(m, -a, -b - 0.02, 0, a, b, 0.07, '#2e2118');
+}
+LIBRARY.konter = { name: 'Konter', icon: '▬', grp: 'perabot', build: (m) => buildKonter(m) };
+
+// Televisi tabung 21" di atas meja televisi berpintu.
+export function buildMejaTV(m) {
+  const a = 0.6, b = 0.22;
+  bx(m, -a, -b, 0.05, a, b, 0.5, PWD);
+  bx(m, -a - 0.02, -b - 0.02, 0.5, a + 0.02, b + 0.02, 0.535, PW);
+  bx(m, -a + 0.04, -b - 0.012, 0.1, -0.01, -b, 0.46, PW);
+  bx(m, 0.01, -b - 0.012, 0.1, a - 0.04, -b, 0.46, PW);
+  rod(m, -0.06, -b - 0.012, 0.3, [0, -1, 0], 0.013, 0.025, BRASS, 8);
+  rod(m, 0.06, -b - 0.012, 0.3, [0, -1, 0], 0.013, 0.025, BRASS, 8);
+  for (const x of [-a + 0.03, a - 0.06]) for (const y of [-b + 0.02, b - 0.05]) bx(m, x, y, 0, x + 0.03, y + 0.03, 0.05, '#2e2118');
+  // televisi
+  bx(m, -0.27, -0.2, 0.535, 0.27, 0.2, 0.535 + 0.4, '#2b2b2d');
+  bx(m, -0.22, -0.205, 0.535 + 0.08, 0.16, -0.2, 0.535 + 0.36, '#0b0d0f');                                // layar mati
+  rod(m, 0.215, -0.205, 0.535 + 0.3, [0, -1, 0], 0.016, 0.02, PM, 8);
+  rod(m, 0.215, -0.205, 0.535 + 0.22, [0, -1, 0], 0.016, 0.02, PM, 8);
+  bx(m, -0.2, 0.2, 0.535 + 0.06, 0.2, 0.34, 0.535 + 0.32, '#232325');                                   // tabung belakang
+  rod(m, 0, 0.1, 0.535 + 0.4, [-0.5, 0, 0.8], 0.006, 0.4, PM, 6);                                       // antena
+  rod(m, 0, 0.1, 0.535 + 0.4, [0.5, 0, 0.8], 0.006, 0.4, PM, 6);
+}
+LIBRARY.meja_tv = { name: 'Televisi + meja', icon: '📺', grp: 'perabot', build: (m) => buildMejaTV(m) };
+
+// Monitor CRT kecil CCTV dengan kaki dan bodi tebal; papan ketik.
+export function buildMonitorCRT(m) {
+  bx(m, -0.2, -0.17, 0.0, 0.2, 0.17, 0.02, '#1c1d1f');
+  bx(m, -0.05, -0.06, 0.02, 0.05, 0.06, 0.07, '#1c1d1f');
+  bx(m, -0.22, -0.15, 0.07, 0.22, 0.12, 0.43, '#d8d6cb');
+  bx(m, -0.18, -0.155, 0.1, 0.18, -0.15, 0.4, '#0b0d0f');
+  bx(m, -0.15, 0.12, 0.1, 0.15, 0.3, 0.38, '#cfcdc2');
+  rod(m, 0.16, -0.155, 0.085, [0, -1, 0], 0.01, 0.01, '#3b7d3b', 6);
+}
+LIBRARY.monitor_crt = { name: 'Monitor CRT', icon: '🖥️', grp: 'perabot', build: (m) => buildMonitorCRT(m) };
+export function buildPapanKetik(m) {
+  bx(m, -0.22, -0.08, 0, 0.22, 0.08, 0.025, '#cfcdc2');
+  for (let r = 0; r < 4; r++) for (let k = 0; k < 12; k++) bx(m, -0.205 + k * 0.034, -0.07 + r * 0.035, 0.025, -0.178 + k * 0.034, -0.045 + r * 0.035, 0.035, '#b9b7ac');
+}
+LIBRARY.papan_ketik = { name: 'Papan ketik', icon: '⌨️', grp: 'perabot', build: (m) => buildPapanKetik(m) };
+
+// Radio transistor lawas dan kotak perkakas dengan pegangan.
+export function buildRadio(m) {
+  bx(m, -0.15, -0.05, 0, 0.15, 0.05, 0.19, '#3a2c20');
+  bx(m, -0.12, -0.055, 0.04, 0.03, -0.05, 0.15, '#bdb9a8');                                              // kisi pengeras suara
+  for (let k = 0; k < 6; k++) bx(m, -0.12, -0.058, 0.05 + k * 0.017, 0.03, -0.055, 0.058 + k * 0.017, '#4a4338');
+  bx(m, 0.05, -0.055, 0.12, 0.13, -0.05, 0.16, '#d8cfa8');                                               // skala frekuensi
+  rod(m, 0.07, -0.055, 0.07, [0, -1, 0], 0.016, 0.02, '#e4ddc0', 10);
+  rod(m, 0.115, -0.055, 0.07, [0, -1, 0], 0.016, 0.02, '#e4ddc0', 10);
+  rod(m, 0.13, 0.0, 0.19, [0.3, 0, 1], 0.004, 0.32, PM, 6);
+}
+LIBRARY.radio_tua = { name: 'Radio tua', icon: '📻', grp: 'perabot', build: (m) => buildRadio(m) };
+export function buildKotakAlat(m) {
+  const a = 0.3, b = 0.15;
+  bx(m, -a, -b, 0, a, b, 0.22, '#a92e22');
+  bx(m, -a - 0.005, -b - 0.005, 0.2, a + 0.005, b + 0.005, 0.24, '#8d261c');
+  bx(m, -0.08, -0.17, 0.24, 0.08, -0.13, 0.27, PM);
+  bx(m, -0.08, 0.13, 0.24, 0.08, 0.17, 0.27, PM);
+  bx(m, -0.08, -0.17, 0.27, 0.08, 0.17, 0.3, PM);
+  bx(m, -0.02, -b - 0.012, 0.15, 0.02, -b, 0.2, PM);
+}
+LIBRARY.kotak_alat = { name: 'Kotak perkakas', icon: '🧰', grp: 'perabot', build: (m) => buildKotakAlat(m) };
+
+// Dipan (ranjang) kerangka telanjang tanpa kasur, dipakai untuk unit kosong/terbakar.
+export function buildDipan(m) {
+  const x0 = -0.5, x1 = 0.5, y0 = -1.0, y1 = 1.0;
+  for (const [x, y] of [[x0, y0], [x1 - 0.06, y0], [x0, y1 - 0.06], [x1 - 0.06, y1 - 0.06]]) bx(m, x, y, 0, x + 0.06, y + 0.06, 0.34, PWD);
+  bx(m, x0, y1 - 0.06, 0.34, x1, y1, 0.9, PWD);
+  bx(m, x0, y0, 0.18, x0 + 0.05, y1 - 0.06, 0.3, PWD);
+  bx(m, x1 - 0.05, y0, 0.18, x1, y1 - 0.06, 0.3, PWD);
+  bx(m, x0 + 0.05, y0, 0.18, x1 - 0.05, y0 + 0.05, 0.3, PWD);
+  for (let k = 0; k < 7; k++) bx(m, x0 + 0.05, y0 + 0.1 + k * 0.26, 0.27, x1 - 0.05, y0 + 0.18 + k * 0.26, 0.3, PW);
+}
+LIBRARY.dipan = { name: 'Dipan (rangka ranjang)', icon: '🛏️', grp: 'perabot', build: (m) => buildDipan(m) };
+
+// Tas ransel kain.
+export function buildTas(m) {
+  blob(m, 0, 0, 0.17, 0.17, 0.1, 0.17, '#3b3f3a');
+  bx(m, -0.14, -0.13, 0.04, 0.14, -0.08, 0.2, '#2c2f2b');
+  rev(m, [0, -0.12, 0.17], Z_, [[0.02, 0], [0.02, 0.01]], BRASS, { seg: 8 });
+  bx(m, -0.012, -0.135, 0.06, 0.012, -0.12, 0.2, BRASS);
+}
+LIBRARY.tas_ransel = { name: 'Tas ransel', icon: '🎒', grp: 'perabot', build: (m) => buildTas(m) };
+LIBRARY.meja_kerja = { name: 'Meja kerja', icon: '▭', grp: 'perabot', build: (m) => buildMejaKayu(m, { w: 2.0, d: 0.85, h: 0.76, top: '#7a5a3a' }) };
+LIBRARY.meja_panjang = { name: 'Meja panjang (CCTV)', icon: '▭', grp: 'perabot', build: (m) => buildMejaKayu(m, { w: 4.2, d: 1.0, h: 0.78, top: '#7a5a3a', laci: false }) };
+LIBRARY.meja_arsip = { name: 'Meja arsip', icon: '▭', grp: 'perabot', build: (m) => buildMejaKayu(m, { w: 2.0, d: 1.2, h: 0.9, top: '#7a5a3a' }) };
+
+// Kursi kayu terguling di sisinya (diputar 90 derajat pada sumbu Y, alas tetap di z = 0).
+export function buildKursiTerguling(m) {
+  buildKursiKayu(m, { col: '#7a5a3a' });
+  const T = (p) => [p[2], p[1], -p[0] + 0.21];
+  for (const f of m.faces) {
+    f.pts = f.pts.map(T);
+    f.holes = f.holes.map((h) => h.map(T));
+    f.n = [f.n[2], f.n[1], -f.n[0]];
+  }
+}
+LIBRARY.kursi_terguling = { name: 'Kursi terguling', icon: '🪑', grp: 'perabot', build: (m) => buildKursiTerguling(m) };
+
+// Kaleng cat tembok: badan, bibir bercat, tutup kaleng miring, tali pegangan, tetesan cat.
+export function buildKalengCat(m) {
+  const R = 0.14, H = 0.3;
+  rev(m, [0, 0, 0], Z_, [[0, 0], [R, 0], [R, H], [R - 0.012, H], [R - 0.012, H - 0.01], [0, H - 0.01]], '#bfc3c4', { seg: 18 });
+  rev(m, [0, 0, H - 0.01], Z_, [[R - 0.012, 0], [R - 0.012, 0.008], [0, 0.008]], '#f4f2ea', { seg: 18 });          // cat putih di dalam
+  rev(m, [0, 0, 0.1], Z_, [[R + 0.004, 0], [R + 0.004, 0.012]], '#8d9296', { seg: 18 });
+  rev(m, [0, 0, 0.2], Z_, [[R + 0.004, 0], [R + 0.004, 0.012]], '#8d9296', { seg: 18 });
+  bx(m, -0.02, -R - 0.004, 0.17, 0.02, -R + 0.004, H, '#f4f2ea');                                                  // tetesan cat
+  bx(m, 0.07, -R + 0.01, 0.2, 0.095, -R + 0.016, H - 0.01, '#f4f2ea');
+  for (let k = 0; k < 8; k++) {
+    const a0 = Math.PI * (k / 8), a1 = Math.PI * ((k + 1) / 8);
+    const p = [R * Math.cos(a0), 0, H + 0.01 + 0.12 * Math.sin(a0)], q = [R * Math.cos(a1), 0, H + 0.01 + 0.12 * Math.sin(a1)];
+    const d = [q[0] - p[0], 0, q[2] - p[2]], L = Math.hypot(d[0], d[2]);
+    rod(m, p[0], p[1], p[2], [d[0] / L, 0, d[2] / L], 0.004, L, '#4a4d50', 5);
+  }
+  bx(m, 0.16, -0.02, 0.0, 0.3, 0.12, 0.012, '#cfd2d4');                                                           // tutup di lantai
+}
+LIBRARY.kaleng_cat = { name: 'Kaleng cat', icon: '🎨', grp: 'perabot', build: (m) => buildKalengCat(m) };
+
+// Tongkat kayu miring bersandar ke dinding (condong ke +X), gagang melengkung, ujung karet.
+export function buildTongkat(m) {
+  const c = '#4a3320', L = 0.92, d = [0.16, 0, 1], n = Math.hypot(d[0], d[2]), u = [d[0] / n, 0, d[2] / n];
+  rod(m, 0, 0, 0, u, 0.013, L, c, 8);
+  rod(m, 0, 0, 0, u, 0.016, 0.03, '#1c1c1c', 8);
+  const top = [u[0] * L, 0, u[2] * L];
+  for (let k = 0; k < 6; k++) {
+    const a0 = Math.PI * (1 - k / 6), a1 = Math.PI * (1 - (k + 1) / 6), r = 0.05;
+    const p = [top[0] + r - r * Math.cos(Math.PI - a0), 0, top[2] + r * Math.sin(a0)], q = [top[0] + r - r * Math.cos(Math.PI - a1), 0, top[2] + r * Math.sin(a1)];
+    const dd = [q[0] - p[0], 0, q[2] - p[2]], l = Math.hypot(dd[0], dd[2]);
+    rod(m, p[0], p[1], p[2], [dd[0] / l, 0, dd[2] / l], 0.013, l + 0.004, c, 8);
+  }
+}
+LIBRARY.tongkat = { name: 'Tongkat kayu', icon: '🦯', grp: 'perabot', build: (m) => buildTongkat(m) };

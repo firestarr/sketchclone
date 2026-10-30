@@ -15,6 +15,22 @@
       <div id="selbox" hidden></div>
       <div id="grips"></div>
       <div id="ctxmenu" hidden></div>
+      <div id="paintDlg" class="dlg" hidden>
+        <div class="ttl">🖌 Lukis tekstur</div>
+        <label class="row"><span>Warna</span><input id="pdColor" type="color"></label>
+        <label class="row"><span>Ukuran kuas</span><span class="pdsz"><input id="pdSize" type="range" min="1" max="60"><b id="pdSizeV"></b></span></label>
+        <label class="row"><span>Kekuatan</span><input id="pdOp" type="range" min="5" max="100"></label>
+        <label class="row"><span>Kekerasan tepi</span><input id="pdHard" type="range" min="0" max="95"></label>
+        <label class="row"><span>Mode</span><select id="pdMode"><option value="lukis">Lukis</option><option value="hapus">Hapus lukisan</option></select></label>
+        <div class="btnrow"><button id="pdClear">Hapus lukisan objek terpilih</button></div>
+        <div class="muted small">Seret di permukaan grup/komponen: kulit, baju, dinding, kendaraan. Lukisan tersimpan di berkas proyek. [ / ] mengubah ukuran kuas.</div>
+      </div>
+      <div id="cmdPal" hidden><input id="cmdIn" placeholder="Cari perintah… (mis. kusen, bulatkan, ratakan, ekspor pdf)" autocomplete="off" spellcheck="false" /><div id="cmdList"></div></div>
+      <div id="cleanDlg" class="dlg wide" hidden>
+        <div class="ttl">Bersihkan Model</div>
+        <div id="cleanList" class="clist"></div>
+        <div class="btnrow"><button id="cleanOk">Bersihkan yang dicentang</button><button id="cleanClose">Tutup</button></div>
+      </div>
       <input type="file" id="refFile" accept="image/*" hidden>
       <div id="shareDlg" class="dlg" hidden>
         <div class="ttl">📱 Lihat di HP</div>
@@ -124,6 +140,7 @@ sketch.log('Selesai: ' + ids.length + ' bidang');</textarea>
         <button data-tab="info">Info</button><button data-tab="mat">Material</button><button data-tab="tags">Tag</button>
         <button data-tab="outliner">Outliner</button><button data-tab="scenes">Adegan</button><button data-tab="styles">Gaya</button>
         <button data-tab="lib">Pustaka</button><button data-tab="kons">Konstruksi</button><button data-tab="prod">Produksi</button>
+        <button data-tab="anim">Animasi</button>
       </div>
       <div class="pane" id="pane-info"></div>
       <div class="pane" id="pane-mat" hidden>
@@ -136,7 +153,7 @@ sketch.log('Selesai: ' + ids.length + ' bidang');</textarea>
           <label>Tinggi (m)<input type="number" id="matScaleV" min="0.01" step="0.1" placeholder="= lebar"></label>
           <label>Sudut (°)<input type="number" id="matRot" step="15" value="0"></label>
         </div>
-        <div class="mrow"><label>Hasil akhir <select id="matFinish"><option value="matte">Doff</option><option value="glossy">Mengkilap</option><option value="metal">Logam</option><option value="glass">Kaca bening</option></select></label></div>
+        <div class="mrow"><label>Hasil akhir <select id="matFinish"><option value="matte">Doff</option><option value="glossy">Mengkilap</option><option value="metal">Logam</option><option value="glass">Kaca bening</option><option value="kain">Kain (serat)</option><option value="kulit">Kulit</option><option value="rambut">Rambut</option></select></label></div>
         <div class="mnote">Alt+klik bidang: ambil material</div>
       </div>
       <div class="pane" id="pane-tags" hidden></div>
@@ -146,6 +163,7 @@ sketch.log('Selesai: ' + ids.length + ' bidang');</textarea>
       <div class="pane" id="pane-scenes" hidden></div>
       <div class="pane" id="pane-styles" hidden></div>
       <div class="pane" id="pane-lib" hidden></div>
+      <div class="pane" id="pane-anim" hidden></div>
     </aside>
     <footer id="status">
       <span id="hint"></span>

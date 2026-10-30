@@ -29,4 +29,7 @@ contextBridge.exposeInMainWorld('api', {
   setDirty: (d) => ipcRenderer.send('state', d),
   listPlugins: () => ipcRenderer.invoke('plugins:list'),
   setPluginMenu: (names) => ipcRenderer.send('plugins:menu', names),
+  menuItems: () => ipcRenderer.invoke('menu:items'),
+  menuRun: (id) => ipcRenderer.invoke('menu:run', id),
+  setTheme: (t) => ipcRenderer.send('theme:set', t),
 });

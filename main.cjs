@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell, safeStorage, nativeTheme } = require('electron');
 const Anthropic = require('@anthropic-ai/sdk').default;
 const { autoUpdater } = require('electron-updater');
 const REPO = 'firestarr/sketchclone';
@@ -59,6 +59,7 @@ function buildMenu() {
         { label: 'Ekspor OBJ + warna/MTL (untuk game)...', click: () => send('exportObjMtl') },
         { label: 'Ekspor glTF (.glb)...', click: () => send('exportGlb') },
         { label: 'Ekspor Gambar PNG...', accelerator: 'CmdOrCtrl+Alt+P', click: () => send('exportPng') },
+        { label: 'Rekam Video Animasi (.webm)...', click: () => send('animRecord') },
         { type: 'separator' },
         { label: 'Ekspor Halaman Web 3D (HTML + AR)...', click: () => send('exportWeb') },
         { label: 'Lihat di HP (Wi-Fi)...', click: () => send('sharePhone') },
@@ -80,6 +81,8 @@ function buildMenu() {
       submenu: [
         { label: 'Urungkan', accelerator: 'CmdOrCtrl+Z', click: () => send('undo') },
         { label: 'Ulangi', accelerator: 'CmdOrCtrl+Y', click: () => send('redo') },
+        { type: 'separator' },
+        { label: 'Cari Perintah...', accelerator: 'F3', click: () => send('palette') },
         { type: 'separator' },
         { label: 'Pilih Semua', accelerator: 'CmdOrCtrl+A', click: () => send('selectAll') },
         { label: 'Hapus', click: () => send('delete') },
@@ -116,6 +119,27 @@ function buildMenu() {
         },
         { label: 'Balik Arah Bidang', click: () => send('reverse') },
         { label: 'Hapus Semua Garis Bantu', click: () => send('clearGuides') },
+        { label: 'Bersihkan Model...', click: () => send('cleanModel') },
+        {
+          label: 'Ratakan & Sebar',
+          submenu: [
+            { label: 'Ratakan Kiri — sumbu merah', click: () => send('align', 'x-min') },
+            { label: 'Ratakan Tengah — sumbu merah', click: () => send('align', 'x-mid') },
+            { label: 'Ratakan Kanan — sumbu merah', click: () => send('align', 'x-max') },
+            { type: 'separator' },
+            { label: 'Ratakan Depan — sumbu hijau', click: () => send('align', 'y-min') },
+            { label: 'Ratakan Tengah — sumbu hijau', click: () => send('align', 'y-mid') },
+            { label: 'Ratakan Belakang — sumbu hijau', click: () => send('align', 'y-max') },
+            { type: 'separator' },
+            { label: 'Ratakan Bawah (menapak) — sumbu biru', click: () => send('align', 'z-min') },
+            { label: 'Ratakan Tengah — sumbu biru', click: () => send('align', 'z-mid') },
+            { label: 'Ratakan Atas — sumbu biru', click: () => send('align', 'z-max') },
+            { type: 'separator' },
+            { label: 'Sebar Rata — sumbu merah', click: () => send('align', 'x-spread') },
+            { label: 'Sebar Rata — sumbu hijau', click: () => send('align', 'y-spread') },
+            { label: 'Sebar Rata — sumbu biru', click: () => send('align', 'z-spread') },
+          ],
+        },
         { type: 'separator' },
         {
           label: 'Solid',
@@ -155,6 +179,13 @@ function buildMenu() {
         },
         { label: 'Zoom Semua', accelerator: 'Shift+Z', click: () => send('zoomExtents') },
         { label: 'Zoom ke Pilihan', click: () => send('zoomSelection') },
+        { label: 'Isolasi Pilihan / Kembali (I)', click: () => send('isolate') },
+        { label: 'Tampilan 4 Jendela (Perspektif + Atas, Depan, Kanan)', click: () => send('quad') },
+        { type: 'separator' },
+        { label: 'Timeline Animasi', click: () => send('timeline') },
+        { label: 'Putar / Jeda Animasi', accelerator: 'CmdOrCtrl+Space', click: () => send('animPlay') },
+        { type: 'separator' },
+        { label: 'Tema Gelap / Terang', click: () => send('theme') },
         { type: 'separator' },
         { role: 'toggleDevTools' },
       ],
@@ -176,7 +207,7 @@ function buildMenu() {
         { label: 'Daftar Pintasan', accelerator: 'F1', click: () => send('help') },
         { label: 'Periksa Pembaruan...', click: () => checkUpdates(true) },
         { label: 'Halaman Proyek di GitHub', click: () => shell.openExternal(`https://github.com/${REPO}`) },
-        { label: 'Ubah Pintasan Keyboard...', click: () => send('keys') },
+        { label: 'Ubah Pintasan Keyboard & Menu Melingkar...', click: () => send('keys') },
       ],
     },
   ];
@@ -258,6 +289,29 @@ function pluginDir() {
   return dir;
 }
 
+// Daftar semua perintah menu untuk kotak Cari Perintah (F3); id = jalur indeks di menu.
+ipcMain.handle('menu:items', () => {
+  const out = [];
+  const walk = (items, pre, path) =>
+    items.forEach((it, i) => {
+      if (it.type === 'separator' || it.role || !it.visible) return;
+      const label = it.label.replace(/(\.\.\.|…)$/, '');
+      if (it.submenu) return walk(it.submenu.items, pre ? pre + ' › ' + label : label, [...path, i]);
+      if (it.enabled) out.push({ id: [...path, i].join('.'), path: (pre ? pre + ' › ' : '') + label, accel: it.accelerator || '' });
+    });
+  const m = Menu.getApplicationMenu();
+  if (m) walk(m.items, '', []);
+  return out;
+});
+ipcMain.on('theme:set', (_e, t) => (nativeTheme.themeSource = t === 'dark' ? 'dark' : 'light'));
+ipcMain.handle('menu:run', (_e, id) => {
+  let items = Menu.getApplicationMenu()?.items, it = null;
+  for (const i of String(id).split('.').map(Number)) {
+    it = items?.[i];
+    items = it?.submenu?.items;
+  }
+  if (it && !it.role && !it.submenu) it.click();
+});
 ipcMain.handle('plugins:list', () => {
   const dir = pluginDir();
   return fs

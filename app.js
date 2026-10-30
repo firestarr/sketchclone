@@ -8,7 +8,15 @@ import { zipSync, strToU8 } from 'fflate';
 import QRCode from 'qrcode';
 import { LIBRARY, insertLibrary } from './library.js';
 import './manusia.js';
+import './motor.js';
+import './kampung.js';
+import './interior_nusantara.js';
+import './publik_nusantara.js';
+import './game_penuh_nusantara.js';
 import * as C from './construct.js';
+import { alignUnits, analyzeModel, cleanModel, closedVolume } from './rapi.js';
+import * as AN from './anim.js';
+import * as PT from './paint.js';
 import * as PR from './production.js';
 import * as S from './struktur.js';
 import { parseSkp } from './skp.js';
@@ -227,7 +235,7 @@ function camDir() {
 
 function updateCamera() {
   aoInteract = true;
-  const w = Math.max(1, stage.clientWidth), h = Math.max(1, stage.clientHeight);
+  const w = Math.max(1, canvas.clientWidth), h = Math.max(1, canvas.clientHeight);
   view.el = Math.max(-EL_MAX, Math.min(EL_MAX, view.el));
   view.dist = Math.max(0.2, Math.min(2500, view.dist));
   camera = view.ortho ? ortho : persp;
@@ -250,6 +258,7 @@ function updateCamera() {
 }
 
 let needsRender = false;
+let quad = null; // tampilan 4 jendela (lihat toggleQuad)
 // ---- Bayangan lembut (ambient occlusion) ----
 // Dihitung saat tampilan diam; ketika sedang menggerakkan kamera/objek dipakai render biasa agar tetap lancar.
 let composer = null, aoPass = null, renderPass = null, aoIdleTimer = 0, aoInteract = false;
@@ -274,7 +283,7 @@ function bgTexture(name) {
   return bgTextures[name];
 }
 function renderAO() {
-  const w = Math.max(1, stage.clientWidth), h = Math.max(1, stage.clientHeight);
+  const w = Math.max(1, canvas.clientWidth), h = Math.max(1, canvas.clientHeight);
   if (!composer) {
     composer = new EffectComposer(renderer);
     renderPass = new RenderPass(scene, camera);
@@ -314,15 +323,16 @@ function requestRender() {
     }
     positionLabels();
     positionGrips();
+    if (quad) renderQuad();
   });
 }
 
 new ResizeObserver(() => {
   renderer.setPixelRatio(window.devicePixelRatio);
-  renderer.setSize(stage.clientWidth, stage.clientHeight, false);
-  for (const m of fatMats) m.resolution.set(stage.clientWidth, stage.clientHeight);
+  renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
+  for (const m of fatMats) m.resolution.set(canvas.clientWidth, canvas.clientHeight);
   updateCamera();
-}).observe(stage);
+}).observe(canvas);
 
 function zoomBox(box) {
   if (box.isEmpty()) {
@@ -336,7 +346,7 @@ function zoomBox(box) {
   }
   updateCamera();
 }
-const zoomExtents = () => zoomBox(G.bboxOf(model, null, makeVisible(model)));
+const zoomExtents = () => zoomBox(G.bboxOf(model, null, viewVisible(model)));
 const zoomSelection = () => (selection.size ? zoomBox(G.bboxOf(model, selection)) : zoomExtents());
 
 function setStdView(name) {
@@ -357,6 +367,118 @@ function setOrtho(on) {
   view.ortho = on;
   document.querySelector('[data-view=ortho]').textContent = on ? 'Paralel' : 'Persp';
   updateCamera();
+}
+
+// ======================= Detail realistis: kulit, rambut, kain =======================
+// Normal map prosedural (dibuat sendiri, bebas lisensi): anyaman kain, pori kulit, helai rambut. Ukuran satu ulangan (m):
+const DETAIL_TILE = { kain: 0.035, kulit: 0.05, rambut: 0.06 };
+const DETAIL_FAM = {
+  kain: { Mat: THREE.MeshStandardMaterial, props: { roughness: 0.9, metalness: 0 }, ns: 0.6 },
+  kulit: { Mat: THREE.MeshPhysicalMaterial, props: { roughness: 0.5, metalness: 0, sheen: 0.6, sheenRoughness: 0.5, sheenColor: new THREE.Color('#ff9478'), specularIntensity: 0.32, clearcoat: 0.06, clearcoatRoughness: 0.55 }, ns: 0.25 },
+  rambut: { Mat: THREE.MeshPhysicalMaterial, props: { roughness: 0.42, metalness: 0, specularIntensity: 0.45, anisotropy: 0.6 }, ns: 0.45 },
+};
+let detailTexs = null;
+function detailNormals() {
+  if (detailTexs) return detailTexs;
+  const N = 256;
+  let seed = 12345;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  // derau nilai yang menyambung di tepi (tileable)
+  const valueNoise = (f) => {
+    const g = new Float32Array(f * f).map(() => rnd());
+    const at = (i, j) => g[((j % f) + f) % f * f + (((i % f) + f) % f)];
+    return (x, y) => {
+      const u = x * f, v = y * f, i = Math.floor(u), j = Math.floor(v), a = u - i, b = v - j;
+      const sa = a * a * (3 - 2 * a), sb = b * b * (3 - 2 * b);
+      return (at(i, j) * (1 - sa) + at(i + 1, j) * sa) * (1 - sb) + (at(i, j + 1) * (1 - sa) + at(i + 1, j + 1) * sa) * sb;
+    };
+  };
+  const make = (hf, strength) => {
+    const H = new Float32Array(N * N);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) H[y * N + x] = hf(x / N, y / N);
+    const c = document.createElement('canvas');
+    c.width = c.height = N;
+    const g = c.getContext('2d'), img = g.createImageData(N, N);
+    const h = (x, y) => H[((y + N) % N) * N + ((x + N) % N)];
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const dx = (h(x + 1, y) - h(x - 1, y)) * strength, dy = (h(x, y + 1) - h(x, y - 1)) * strength;
+      const l = Math.hypot(dx, dy, 1), o = (y * N + x) * 4;
+      img.data[o] = (-dx / l * 0.5 + 0.5) * 255;
+      img.data[o + 1] = (dy / l * 0.5 + 0.5) * 255;
+      img.data[o + 2] = (1 / l * 0.5 + 0.5) * 255;
+      img.data[o + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    const t = new THREE.CanvasTexture(c);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.colorSpace = THREE.NoColorSpace;
+    t.anisotropy = 4;
+    return t;
+  };
+  // anyaman polos: benang lungsin & pakan bergantian naik-turun, ditambah serat halus
+  const fib = valueNoise(64), lump = valueNoise(8);
+  const weave = make((x, y) => {
+    const n = 12, u = x * n, v = y * n, iu = Math.floor(u), iv = Math.floor(v), fu = u - iu, fv = v - iv;
+    const over = (iu + iv) % 2 === 0;
+    const warp = Math.sin(Math.PI * fu) * (0.55 + 0.45 * Math.sin(Math.PI * fv));
+    const weft = Math.sin(Math.PI * fv) * (0.55 + 0.45 * Math.sin(Math.PI * fu));
+    return (over ? warp : weft) * 0.8 + fib(x, y) * 0.25 + lump(x, y) * 0.15;
+  }, 3.2);
+  // kulit: pori-pori kecil + gelombang halus
+  const pores = new Float32Array(N * N), s1 = valueNoise(6), s2 = valueNoise(24);
+  for (let k = 0; k < 900; k++) {
+    const cx = rnd() * N, cy = rnd() * N, r = 0.8 + rnd() * 1.4;
+    for (let y = -3; y <= 3; y++) for (let x = -3; x <= 3; x++) {
+      const px = Math.floor(cx + x), py = Math.floor(cy + y), d2 = (px - cx) ** 2 + (py - cy) ** 2;
+      pores[((py + N) % N) * N + ((px + N) % N)] -= Math.exp(-d2 / (r * r));
+    }
+  }
+  const skin = make((x, y) => pores[Math.floor(y * N) * N + Math.floor(x * N)] * 0.5 + s1(x, y) * 0.6 + s2(x, y) * 0.25, 2.2);
+  // rambut: helai memanjang (derau rapat di satu arah, renggang di arah lain)
+  const hs = valueNoise(96), hl = valueNoise(4);
+  const hair = make((x, y) => hs(x, (y + hl(x, y) * 0.3) / 24) * 1.2, 2.6);
+  detailTexs = { kain: weave, kulit: skin, rambut: hair };
+  return detailTexs;
+}
+// texScale: ukuran satu ulangan UV (batik memakai skala teksturnya; lainnya meter)
+function detailMatProps(fam, texScale = 1) {
+  const F = DETAIL_FAM[fam], nm = detailNormals()[fam].clone(), rep = texScale / DETAIL_TILE[fam];
+  nm.repeat.set(rep, rep);
+  nm.needsUpdate = true;
+  return { ...F.props, normalMap: nm, normalScale: new THREE.Vector2(F.ns, F.ns) };
+}
+
+// Lapisan lukisan tekstur (alat Lukis Tekstur): gambar PNG transparan per lapisan, disimpan di model.paints
+const paintCache = new Map(); // id -> { size, img, canvas, ctx, tex }
+function paintTexture(m, lid) {
+  const L = m.paints?.[lid];
+  if (!L) return null;
+  let c = paintCache.get(lid);
+  if (!c || c.size !== L.size) {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = L.size;
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    paintCache.set(lid, (c = { size: L.size, img: undefined, canvas, ctx: canvas.getContext('2d'), tex }));
+  }
+  if (c.img !== L.img) {
+    c.img = L.img;
+    c.ctx.clearRect(0, 0, c.size, c.size);
+    c.tex.needsUpdate = true;
+    if (L.img) {
+      const im = new Image();
+      im.onload = () => {
+        if (c.img !== L.img) return;
+        c.ctx.clearRect(0, 0, c.size, c.size);
+        c.ctx.drawImage(im, 0, 0);
+        c.tex.needsUpdate = true;
+        requestRender();
+      };
+      im.src = L.img;
+    }
+  }
+  return c;
 }
 
 // ======================= Model, riwayat =======================
@@ -408,7 +530,7 @@ function makeVisible(m) {
     if (g == null) return true;
     if (gcache.has(g)) return gcache.get(g);
     const gr = m.groups[g];
-    const ok = !gr || (!gr.hidden && tagOk(gr.tag) && groupOk(gr.parent ?? null));
+    const ok = !gr || (!gr.hidden && (!gr.animHidden || ignoreAnimHidden) && tagOk(gr.tag) && groupOk(gr.parent ?? null));
     gcache.set(g, ok);
     return ok;
   };
@@ -424,6 +546,16 @@ function makeVisible(m) {
   return (e) => !e.hidden && tagOk(e.tag) && groupOk(gOf(e)) && phaseOk(gOf(e));
 }
 let visibleFn = () => true;
+let animT = 0, animView = null, animPlaying = null, animEase = 'halus', animLoop = false; // status animasi (lihat bagian Animasi)
+let ignoreAnimHidden = false; // true saat menyiapkan animasi: objek yang muncul belakangan tetap ikut dibangun
+// Mode isolasi (seperti Local View di Blender): hanya objek terpilih (+ geometri baru) yang tampil. Tidak disimpan ke berkas.
+let isolate = null; // { ids, max, cam }
+function viewVisible(m) {
+  const vis = makeVisible(m);
+  if (!isolate) return vis;
+  const { ids, max } = isolate;
+  return (e) => vis(e) && (ids.has(e.id) || e.id >= max);
+}
 
 // opts.exclude: Set id yang tidak digambar (bagian yang sedang digerakkan)
 // opts.target + opts.partial: gambar hanya bidang/garis ke grup lain (tanpa pick, label, dll.)
@@ -438,7 +570,7 @@ function rebuild(m, opts = {}) {
   }
   disposeGroup(target);
   const st = styleOf(m);
-  const vis = makeVisible(m);
+  const vis = viewVisible(m);
   if (!partial) visibleFn = vis;
   const edges = [], dimEdges = [], selEdges = [], lines = [], dimLines = [], selLines = [], guides = [];
   const ekey = (a, b) => {
@@ -459,6 +591,8 @@ function rebuild(m, opts = {}) {
   const smoothCos = st.smooth > 0 ? Math.cos((st.smooth * Math.PI) / 180) : 2;
   const isSoft = (a, b) => {
     const arr = emap.get(ekey(a, b));
+    // permukaan halus (figur, kendaraan): tanpa garis tepi antar-segitiga, juga di ujung terbuka
+    if (arr && arr.every((e) => e.f.soft)) return true;
     if (!arr || arr.length !== 2) return false;
     const [x, y] = arr;
     if (x.hole || y.hole) return false;
@@ -523,6 +657,45 @@ function rebuild(m, opts = {}) {
     if (!phCache.has(g)) phCache.set(g, C.phaseOf(m, g));
     return phCache.get(g);
   };
+  // ---- detail realistis (gaya Berbayang): warna per titik + material kulit/rambut/kain berpola halus ----
+  const detail = st.face === 'shaded' && st.detail !== false;
+  const colCache = new Map();
+  const colorOf = (hex) => {
+    let c = colCache.get(hex);
+    if (!c) colCache.set(hex, (c = new THREE.Color(hex)));
+    return c;
+  };
+  // warna tiap titik = rata-rata (berbobot luas) bidang halus di sekitarnya yang warnanya mirip,
+  // sehingga belang antar-segitiga hilang tetapi batas kulit–baju tetap tegas
+  const vcol = new Map();
+  if (detail) for (const f of faces) {
+    if (!f.soft || f.tex) continue;
+    const c = colorOf(f.color), w = Math.max(1e-6, G.faceArea(f));
+    for (const p of f.pts) {
+      const k = (f.solid ?? '') + '|' + G.key(p);
+      let a = vcol.get(k);
+      if (!a) vcol.set(k, (a = []));
+      a.push(c, w);
+    }
+  }
+  const vcolAt = (f, p) => {
+    const c0 = colorOf(f.color), a = vcol.get((f.solid ?? '') + '|' + G.key(p));
+    if (!a) return c0;
+    let r = 0, g = 0, bl = 0, W = 0;
+    for (let i = 0; i < a.length; i += 2) {
+      const c = a[i];
+      if (Math.abs(c.r - c0.r) + Math.abs(c.g - c0.g) + Math.abs(c.b - c0.b) > 0.16) continue;
+      r += c.r * a[i + 1], g += c.g * a[i + 1], bl += c.b * a[i + 1], W += a[i + 1];
+    }
+    return W ? { r: r / W, g: g / W, b: bl / W } : c0;
+  };
+  const famOf = (f) => (DETAIL_FAM[f.finish] ? f.finish : f.bp === 'k' ? 'kulit' : f.bp === 'r' ? 'rambut' : f.bp && 'TALbxalF'.includes(f.bp) ? 'kain' : null);
+  const boxUV = (f) => {
+    const n = f.n, ax = Math.abs(n[0]) > Math.abs(n[1]) ? (Math.abs(n[0]) > Math.abs(n[2]) ? 0 : 2) : Math.abs(n[1]) > Math.abs(n[2]) ? 1 : 2;
+    const [i, j] = ax === 0 ? [1, 2] : ax === 1 ? [0, 2] : [0, 1];
+    return (p) => [p[i], p[j]];
+  };
+  const paintB = new Map(); // lapisan lukisan tekstur (alat Lukis Tekstur) per lapisan
   for (const f of faces) {
     const tris = trisOf(f);
     if (!tris.length) continue;
@@ -534,19 +707,39 @@ function rebuild(m, opts = {}) {
     const finish = st.face === 'shaded' ? f.finish || (f.shiny ? 'glossy' : 'matte') : 'matte';
     const shiny = finish !== 'matte';
     const ph = phColor ? phOf(f) : '';
-    const key = `${colKey}|${sel ? 1 : 0}|${dim ? 1 : 0}|${f.opacity ?? 1}|${finish}|${ph}`;
+    const fam = detail ? famOf(f) : null, vc = detail && f.soft && !map;
+    const key = `${vc ? 'vc' : colKey}|${sel ? 1 : 0}|${dim ? 1 : 0}|${f.opacity ?? 1}|${finish}|${ph}|${fam || ''}|${fam && map ? f.texScale || 1 : ''}`;
     let b = batches.get(key);
-    if (!b) batches.set(key, (b = { pos: [], nor: [], uv: map ? [] : null, ids: [], f, map, sel, dim, op: f.opacity ?? 1, shiny, finish, ph }));
+    if (!b) batches.set(key, (b = { pos: [], nor: [], uv: map || fam ? [] : null, col: vc ? [] : null, ids: [], f, map, sel, dim, op: f.opacity ?? 1, shiny, finish, ph, fam }));
     for (const p of tris) {
       b.pos.push(p[0], p[1], p[2]);
       const nn = vnorm.size ? normalAt(f, p) : f.n;
       b.nor.push(nn[0], nn[1], nn[2]);
+      if (vc) {
+        const c = vcolAt(f, p);
+        b.col.push(c.r, c.g, c.b);
+      }
     }
     if (map) {
       const uvf = texMapper(f);
       for (const p of tris) b.uv.push(...uvf(p));
+    } else if (fam) {
+      const uvf = boxUV(f);
+      for (const p of tris) b.uv.push(...uvf(p));
     }
     for (let i = 0; i < tris.length; i += 3) b.ids.push(f.id);
+    if (f.paint != null && f.puv && st.face !== 'wire' && st.face !== 'hidden') {
+      let pb = paintB.get(f.paint);
+      if (!pb) paintB.set(f.paint, (pb = { pos: [], nor: [], uv: [], ids: [] }));
+      const at = new Map(f.pts.map((p, i) => [G.key(p), f.puv[i]]));
+      for (const p of tris) {
+        pb.pos.push(p[0], p[1], p[2]);
+        const nn = vnorm.size ? normalAt(f, p) : f.n;
+        pb.nor.push(nn[0], nn[1], nn[2]);
+        pb.uv.push(...(at.get(G.key(p)) || [0, 0]));
+      }
+      for (let i = 0; i < tris.length; i += 3) pb.ids.push(f.id);
+    }
     if (!st.edges && !sel) continue;
     const dst = sel ? selEdges : dim ? dimEdges : edges;
     pushLoop(dst, f.pts);
@@ -558,10 +751,11 @@ function rebuild(m, opts = {}) {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(b.pos, 3));
     geo.setAttribute('normal', new THREE.Float32BufferAttribute(b.nor, 3));
     if (b.uv) geo.setAttribute('uv', new THREE.Float32BufferAttribute(b.uv, 2));
+    if (b.col) geo.setAttribute('color', new THREE.Float32BufferAttribute(b.col, 3));
     let col;
     if (st.face === 'mono') col = new THREE.Color('#eceae4');
     else if (st.face === 'hidden' || st.face === 'wire') col = new THREE.Color('#ffffff');
-    else col = new THREE.Color(b.map ? '#ffffff' : b.f.color);
+    else col = new THREE.Color(b.map || b.col ? '#ffffff' : b.f.color);
     if (b.ph === 'exist') col.lerp(new THREE.Color('#9aa3ad'), 0.6);
     else if (b.ph === 'demo') col.lerp(new THREE.Color('#e5533d'), 0.75);
     else if (b.ph === 'new') col.lerp(new THREE.Color('#f4b63f'), 0.22);
@@ -580,12 +774,16 @@ function rebuild(m, opts = {}) {
     const wire = st.face === 'wire';
     if (wire) Object.assign(base, { colorWrite: false, depthWrite: false });
     const flat = st.face === 'hidden' || wire;
+    const fam = !flat && b.fam && DETAIL_FAM[b.fam];
     const Mat = flat ? THREE.MeshBasicMaterial : st.face === 'toon' ? THREE.MeshToonMaterial
+      : fam ? fam.Mat
       : b.finish === 'metal' || b.finish === 'glass' ? THREE.MeshStandardMaterial : b.shiny ? THREE.MeshPhongMaterial : THREE.MeshLambertMaterial;
     const extra = st.face === 'toon' ? { gradientMap: toonRamp }
+      : fam ? detailMatProps(b.fam, b.map ? (b.f.texScale || 1) : 1)
       : b.finish === 'metal' ? { metalness: 0.92, roughness: 0.25 }
       : b.finish === 'glass' ? { metalness: 0.1, roughness: 0.03, envMapIntensity: 1.6 }
       : b.shiny ? { shininess: 90, specular: 0x555555 } : {};
+    if (b.col && !flat) extra.vertexColors = true;
     const front = new THREE.Mesh(geo, new Mat({ color: col, map: b.map, ...extra, ...base }));
     const backCol = b.sel ? 0x5f7fb8 : flat ? 0xffffff : 0x9db0c8;
     const back = new THREE.Mesh(geo, new Mat({ color: backCol, side: THREE.BackSide, ...base }));
@@ -602,6 +800,21 @@ function rebuild(m, opts = {}) {
     }
   }
 
+  // lapisan lukisan: digambar tipis di atas permukaan asli (transparan selain goresan kuas)
+  for (const [lid, pb] of paintB) {
+    const tex = paintTexture(m, lid);
+    if (!tex) continue;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pb.pos, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(pb.nor, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(pb.uv, 2));
+    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: tex.tex, transparent: true, alphaTest: 0.02, depthWrite: false, roughness: 0.75, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, ...clip }));
+    mesh.userData.triFace = pb.ids;
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 1;
+    target.add(mesh);
+  }
+
   for (const l of m.lines) {
     if (!vis(l) || (ex && ex.has(l.id))) continue;
     const dst = selection.has(l.id) ? selLines : isDim(l) ? dimLines : lines;
@@ -615,7 +828,7 @@ function rebuild(m, opts = {}) {
       const g = new LineSegmentsGeometry();
       g.setPositions(arr);
       const mat = new LineMaterial({ color, linewidth: width, ...clip });
-      mat.resolution.set(stage.clientWidth, stage.clientHeight);
+      mat.resolution.set(canvas.clientWidth, canvas.clientHeight);
       fatMats.add(mat);
       const ls = new LineSegments2(g, mat);
       ls.frustumCulled = false;
@@ -1271,6 +1484,8 @@ function pruneSelection() {
 
 // Dipanggil setelah model berubah lewat sebuah operasi.
 function changed() {
+  if (animPlaying) animPause();
+  else if (animView) animTeardown();
   guide.visible = false;
   guide2.visible = false;
   snapCache = null;
@@ -1284,6 +1499,8 @@ function changed() {
 
 function restore(i) {
   cancelTool();
+  if (animPlaying) cancelAnimationFrame(animPlaying.raf), (animPlaying = null);
+  animTeardown();
   hi = i;
   model = G.cloneModel(history[hi]);
   snapCache = null;
@@ -1446,7 +1663,18 @@ function faceById(id) {
   const f = c.map.get(id);
   return f && f.id === id ? f : model.faces.find((x) => x.id === id);
 }
-function pickFace(ev, exclude) {
+// Objek terkunci (gembok di Outliner): tidak bisa dipilih atau diubah, tapi tetap tampil & bisa dijadikan acuan snap.
+function isLocked(e) {
+  for (let g = e ? gOf(e) : null; g != null; g = model.groups[g]?.parent ?? null) if (model.groups[g]?.locked) return true;
+  return !!(e && e.locked);
+}
+let lockToastAt = 0;
+function lockedHit() {
+  if (performance.now() - lockToastAt > 2500) toast('Objek terkunci — buka gembok di Outliner untuk mengubahnya');
+  lockToastAt = performance.now();
+}
+// edit = true: dipakai alat yang memilih/mengubah; bidang objek terkunci dianggap tidak kena.
+function pickFace(ev, exclude, edit = false) {
   getRay(ev);
   ensureBVH();
   for (const h of raycaster.intersectObjects(pickMeshes, false)) {
@@ -1456,6 +1684,10 @@ function pickFace(ev, exclude) {
     if (!face) continue;
     if (editGroup != null && !G.isInTree(model, gOf(face), editGroup)) continue;
     if (activeClip && activeClip.distanceToPoint(h.point) < -1e-6) continue;
+    if (edit && isLocked(face)) {
+      if (ev.type === 'pointerdown') lockedHit();
+      return null;
+    }
     return { faceId: id, face, point: h.point.clone() };
   }
   return null;
@@ -1469,12 +1701,12 @@ function toScreen(v) {
   return { x: ((p.x + 1) / 2) * r.width, y: ((1 - p.y) / 2) * r.height };
 }
 
-function pickLine(ev) {
+function pickLine(ev, edit = false) {
   const r = canvas.getBoundingClientRect();
   const mx = ev.clientX - r.left, my = ev.clientY - r.top;
   let best = null, bd = 6;
   for (const l of [...model.lines, ...model.guides]) {
-    if (!visibleFn(l)) continue;
+    if (!visibleFn(l) || (edit && isLocked(l))) continue;
     const a = toScreen(V3(l.a)), b = toScreen(V3(l.b));
     if (!a || !b) continue;
     const dx = b.x - a.x, dy = b.y - a.y;
@@ -1504,7 +1736,7 @@ function buildSnap() {
     if (!e) em.set(k, (e = { a: V3(a), b: V3(b), ids: [] }));
     e.ids.push(id);
   };
-  const vis = makeVisible(model);
+  const vis = viewVisible(model);
   for (const f of model.faces) {
     if (!vis(f)) continue;
     for (const loop of [f.pts, ...f.holes]) {
@@ -1832,11 +2064,12 @@ function setTool(name) {
   setHint(tool.hint);
   canvas.style.cursor = tool.cursor || 'crosshair';
   if (name === 'paint') showTray('mat');
+  if ($('paintDlg')) $('paintDlg').hidden = name !== 'texpaint';
   tool.activate && tool.activate();
 }
 
 const hoverFace = (ev, color) => {
-  const hit = pickFace(ev);
+  const hit = pickFace(ev, null, true);
   setHover(hit ? hit.faceId : null, color);
   return hit;
 };
@@ -1871,8 +2104,8 @@ tools.select = {
   },
   down(ev) {
     this.box = { x: ev.clientX, y: ev.clientY, add: ev.shiftKey || ev.ctrlKey, active: false, keep: [] };
-    const lid = pickLine(ev);
-    const hit = pickFace(ev);
+    const lid = pickLine(ev, true);
+    const hit = pickFace(ev, null, true);
     const id = lid != null ? lid : hit ? hit.faceId : null;
     if (id == null) {
       if (!ev.shiftKey) selection = new Set();
@@ -1890,7 +2123,7 @@ tools.select = {
     updateInfo();
   },
   dbl(ev) {
-    const hit = pickFace(ev);
+    const hit = pickFace(ev, null, true);
     if (!hit) {
       exitEdit();
       return;
@@ -1945,10 +2178,10 @@ function boxSelect(x0, y0, x1, y1) {
     }
     return true;
   };
-  const vis = makeVisible(model);
+  const vis = viewVisible(model);
   const units = new Map();
   for (const e of [...model.faces, ...model.lines]) {
-    if (!vis(e)) continue;
+    if (!vis(e) || isLocked(e)) continue;
     if (editGroup != null && !G.isInTree(model, gOf(e), editGroup)) continue;
     if (activeClip && (e.pts || [e.a, e.b]).every((p) => activeClip.distanceToPoint(V3(p)) < -1e-4)) continue;
     const t = topOf(e);
@@ -2677,7 +2910,7 @@ tools.pushpull = {
   cancel() { this.pp = null; },
   down(ev) {
     if (this.pp) return this.commit(this.pp.d);
-    const hit = pickFace(ev);
+    const hit = pickFace(ev, null, true);
     if (!hit) return;
     if (topOf(hit.face) != null) {
       toast('Klik ganda grup untuk mengeditnya dulu');
@@ -2718,7 +2951,7 @@ tools.pushpull = {
   },
   dbl(ev) {
     if (this.pp || !lastPull) return;
-    const hit = pickFace(ev);
+    const hit = pickFace(ev, null, true);
     if (!hit) return;
     if (topOf(hit.face) != null) return;
     G.pushPull(model, hit.faceId, lastPull);
@@ -2736,7 +2969,7 @@ tools.pushpull = {
 // ---- Pindah ----
 function selectionForTransform(ev) {
   if (!selection.size && ev) {
-    const hit = pickFace(ev);
+    const hit = pickFace(ev, null, true);
     if (hit) {
       const t = topOf(hit.face);
       selection = t != null ? G.entitiesInTree(model, t) : new Set([hit.faceId]);
@@ -2818,12 +3051,12 @@ tools.move = {
         .concat(model.lines.filter((l) => keys.includes(G.key(l.a)) || keys.includes(G.key(l.b))).map((l) => l.id));
       if (owners.length && inScope(owners)) return { keys: new Set(keys), owners };
     }
-    const lid = pickLine(ev);
+    const lid = pickLine(ev, true);
     if (lid != null) {
       const l = entityOf(lid);
       if (l && l.a && inScope([lid])) return { keys: new Set([G.key(l.a), G.key(l.b)]), owners: [lid] };
     }
-    const hit = pickFace(ev);
+    const hit = pickFace(ev, null, true);
     if (hit && topOf(hit.face) == null) {
       const keys = new Set([hit.face.pts, ...hit.face.holes].flat().map(G.key));
       const owners = model.faces.filter((f) => [f.pts, ...f.holes].some((l) => l.some((q) => keys.has(G.key(q))))).map((f) => f.id);
@@ -2949,7 +3182,7 @@ tools.rotate = {
       }
       this.center = r.p.clone();
       this.ax = null;
-      const hit = pickFace(ev);
+      const hit = pickFace(ev, null, true);
       if (hit) {
         const n = V3(hit.face.n);
         const ai = AXES.findIndex((a) => Math.abs(n.dot(a)) > 0.999);
@@ -3303,10 +3536,10 @@ tools.eraser = {
     else hoverFace(ev, '#ff6b6b');
   },
   erase(ev) {
-    const lid = pickLine(ev);
+    const lid = pickLine(ev, true);
     let id = lid;
     if (id == null) {
-      const hit = pickFace(ev);
+      const hit = pickFace(ev, null, true);
       id = hit ? hit.faceId : null;
     }
     if (id == null) return;
@@ -3329,7 +3562,7 @@ tools.paint = {
   hint: 'Pilih warna/tekstur di panel Material, klik bidang. Shift+klik: seluruh objek. Alt+klik: ambil material dari bidang.',
   move(ev) { hoverFace(ev, '#ffd43b'); },
   down(ev) {
-    const hit = pickFace(ev);
+    const hit = pickFace(ev, null, true);
     if (!hit) return;
     if (ev.altKey) {
       const f = hit.face;
@@ -3393,6 +3626,260 @@ tools.tape = {
     const dir = this.cur.clone().sub(this.p0);
     if (!(L > 0) || dir.length() < 1e-6) return;
     this.place(this.p0.clone().addScaledVector(dir.normalize(), L));
+  },
+  onLock() { lastEv && this.move(lastEv); },
+};
+
+// ---- Lukis tekstur (Texture Paint): kuas melukis langsung di permukaan objek ----
+const brush = { color: '#b03a2e', size: 0.04, opacity: 0.8, hard: 0.5, erase: false };
+const paintRt = new Map(); // id lapisan -> { key, inv, index } (indeks bidang di memori)
+function paintLayerOf(gid) {
+  for (const [id, L] of Object.entries(model.paints || {})) if (L.gid === gid && model.faces.some((f) => f.paint === +id)) return +id;
+  return null;
+}
+function ensurePaintLayer(gid) {
+  let lid = paintLayerOf(gid);
+  if (lid != null) return lid;
+  const tree = G.entitiesInTree(model, gid), ids = new Set(model.faces.filter((f) => tree.has(f.id)).map((f) => f.id));
+  if (!ids.size) return null;
+  const size = ids.size > 4000 ? 2048 : 1024;
+  const inv = new THREE.Matrix4().fromArray(model.groups[gid].m).invert();
+  const U = PT.unwrap(model, ids, inv, size);
+  lid = model.nextId++;
+  for (const f of model.faces) if (ids.has(f.id)) f.paint = lid;
+  (model.paints ||= {})[lid] = { gid, size, s: U.s, charts: U.charts, img: null };
+  changed();
+  toast(`Lapisan lukisan dibuat untuk "${model.groups[gid].name}" (${size}×${size} piksel)`);
+  return lid;
+}
+function paintRuntime(lid) {
+  const L = model.paints[lid], g = model.groups[L.gid];
+  if (!g) return null;
+  const key = g.m.join(',') + '|' + model.faces.length;
+  let rt = paintRt.get(lid);
+  if (!rt || rt.key !== key) {
+    const inv = new THREE.Matrix4().fromArray(g.m).invert();
+    paintRt.set(lid, (rt = { key, inv, nrm: new THREE.Matrix3().getNormalMatrix(inv), index: PT.paintIndex(model.faces.filter((f) => f.paint === lid), inv) }));
+  }
+  return rt;
+}
+function paintDab(ctx, x, y, R, ch) {
+  ctx.save();
+  if (ch && ch.pw != null) {
+    ctx.beginPath();
+    ctx.rect(ch.ox - 1, ch.oy - 1, ch.pw + 2, ch.ph + 2);
+    ctx.clip();
+  }
+  ctx.globalCompositeOperation = brush.erase ? 'destination-out' : 'source-over';
+  const c = new THREE.Color(brush.color), a = Math.min(1, brush.opacity * 0.45);
+  const rgb = `${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)}`;
+  const gr = ctx.createRadialGradient(x, y, R * brush.hard * 0.95, x, y, Math.max(R, 0.6));
+  gr.addColorStop(0, `rgba(${rgb},${a})`);
+  gr.addColorStop(1, `rgba(${rgb},0)`);
+  ctx.fillStyle = gr;
+  ctx.beginPath();
+  ctx.arc(x, y, Math.max(R, 0.6), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+function brushRing(ev, hit) {
+  let el = $('brushRing');
+  if (!el) stage.append((el = mkEl('div', { id: 'brushRing' })));
+  if (!hit || tool !== tools.texpaint) return (el.hidden = true);
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+  const a = toScreen(hit.point), b = toScreen(hit.point.clone().addScaledVector(right, brush.size));
+  if (!a || !b) return (el.hidden = true);
+  const r = Math.max(3, Math.hypot(b.x - a.x, b.y - a.y));
+  Object.assign(el.style, { left: a.x - r + 'px', top: a.y - r + 'px', width: 2 * r + 'px', height: 2 * r + 'px', borderColor: brush.erase ? '#fff' : brush.color });
+  el.hidden = false;
+}
+tools.texpaint = {
+  label: 'Lukis tekstur', key: '', cursor: 'none',
+  icon: '<path d="M14 4l6 6-8 8H6v-6z"/><path d="M4 20c2 0 3-1 3-3"/><circle cx="17" cy="7" r="1" fill="currentColor"/>',
+  hint: 'Seret di permukaan grup/komponen untuk melukis (kulit, baju, dinding, apa saja). Atur warna & kuas di kotak Lukis. [ / ] : kecil/besarkan kuas. Ctrl+Z membatalkan goresan.',
+  st: null,
+  activate() { $('paintDlg').hidden = false; syncPaintDlg(); },
+  cancel() { this.st = null; const el = $('brushRing'); el && (el.hidden = true); },
+  down(ev) {
+    const hit = pickFace(ev, null, true);
+    if (!hit) return;
+    const g = topOf(hit.face) ?? hit.face.group ?? null;
+    if (g == null) return toast('Lukis tekstur untuk grup/komponen: pilih bendanya lalu Ctrl+G dulu');
+    const lid = ensurePaintLayer(g);
+    if (lid == null) return;
+    paintTexture(model, lid);
+    this.st = { lid, last: null };
+    this.stamp(pickFace(ev, null, true) || hit);
+  },
+  move(ev) {
+    const hit = pickFace(ev, null, true);
+    brushRing(ev, hit);
+    if (!this.st || !(ev.buttons & 1) || !hit) return;
+    this.stamp(hit);
+  },
+  up() {
+    if (!this.st) return;
+    const L = model.paints[this.st.lid], c = paintCache.get(this.st.lid);
+    this.st = null;
+    if (!L || !c) return;
+    L.img = c.canvas.toDataURL('image/png');
+    c.img = L.img;
+    changed();
+  },
+  stamp(hit) {
+    const lid = this.st.lid;
+    if (hit.face.paint !== lid) return; // goresan hanya pada objek yang sedang dilukis
+    const L = model.paints[lid], rt = paintRuntime(lid), c = paintCache.get(lid);
+    if (!rt || !c) return;
+    const q = hit.point.clone().applyMatrix4(rt.inv), n = V3(hit.face.n).applyMatrix3(rt.nrm).normalize().toArray();
+    const pts = [];
+    if (this.st.last) {
+      const d = q.distanceTo(this.st.last), k = Math.min(60, Math.ceil(d / (brush.size * 0.3)));
+      for (let i = 1; i <= k; i++) pts.push(this.st.last.clone().lerp(q, i / k));
+    } else pts.push(q);
+    for (const p of pts) for (const [ci, [x, y]] of PT.stampTargets(L, rt.index, p.toArray(), brush.size, n)) paintDab(c.ctx, x, y, brush.size * L.s, L.charts[ci]);
+    c.tex.needsUpdate = true;
+    this.st.last = q;
+    requestRender();
+  },
+};
+function syncPaintDlg() {
+  $('pdColor').value = brush.color;
+  $('pdSize').value = Math.round(brush.size * 200);
+  $('pdSizeV').textContent = `${Math.round(brush.size * 200)} cm`;
+  $('pdOp').value = Math.round(brush.opacity * 100);
+  $('pdHard').value = Math.round(brush.hard * 100);
+  $('pdMode').value = brush.erase ? 'hapus' : 'lukis';
+}
+function clearPaintSel() {
+  const { tops } = selectedTops();
+  const gs = tops.size ? [...tops] : Object.values(model.paints || {}).map((L) => L.gid);
+  let n = 0;
+  for (const g of gs) {
+    const lid = paintLayerOf(g);
+    if (lid == null) continue;
+    for (const f of model.faces) if (f.paint === lid) delete f.paint, delete f.puv, delete f.pchart;
+    delete model.paints[lid];
+    paintCache.delete(lid);
+    n++;
+  }
+  if (!n) return toast('Tidak ada lukisan pada objek terpilih');
+  changed();
+  toast(`Lukisan dihapus dari ${n} objek`);
+}
+
+// ---- Busur derajat (protractor): garis bantu bersudut ----
+const protArc = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xe8590c, depthTest: false }));
+protArc.renderOrder = 10;
+protArc.visible = false;
+protArc.frustumCulled = false;
+overlay.add(protArc);
+tools.protractor = {
+  label: 'Busur derajat', key: '',
+  icon: '<path d="M3 18a9 9 0 0 1 18 0z"/><path d="M12 18l5-6"/><path d="M6 15l1 1M12 9v1.5M18 15l-1 1"/>',
+  hint: 'Klik titik pusat, klik arah 0°, lalu putar dan klik untuk membuat garis bantu bersudut (melompat tiap 15°; tahan Shift: bebas). Ketik sudut + Enter. Panah ← → ↑ sebelum klik pertama: bidang tegak lurus sumbu merah/hijau/biru.',
+  st: 0, c: null, n: null, u: null, ang: 0,
+  cancel() {
+    this.st = 0;
+    this.c = null;
+    guide.visible = guide2.visible = protArc.visible = false;
+    setMeasure('');
+    requestRender();
+  },
+  onPlane(ev) {
+    const r = inferPoint(ev, { plane: { p: this.c.clone(), n: this.n.clone() } });
+    const p = r ? r.p.clone() : rayPlane(getRay(ev), this.c, this.n);
+    if (!p) return null;
+    return p.addScaledVector(this.n, -p.clone().sub(this.c).dot(this.n));
+  },
+  w() { return new THREE.Vector3().crossVectors(this.n, this.u).normalize(); },
+  dir(a) { return this.u.clone().multiplyScalar(Math.cos(a)).addScaledVector(this.w(), Math.sin(a)); },
+  drawArc(R, a = null) {
+    const pts = [], u = this.u || planeAxes(this.n)[0], w = new THREE.Vector3().crossVectors(this.n, u).normalize();
+    const P = (t, r) => this.c.clone().addScaledVector(u, Math.cos(t) * r).addScaledVector(w, Math.sin(t) * r);
+    for (let i = 0; i < 72; i++) pts.push(P((i * Math.PI) / 36, R), P(((i + 1) * Math.PI) / 36, R));
+    for (let d = 0; d < 360; d += 15) pts.push(P((d * Math.PI) / 180, R * (d % 90 ? 0.92 : 0.82)), P((d * Math.PI) / 180, R));
+    if (a != null) {
+      const k = Math.max(2, Math.round(Math.abs(a) / (Math.PI / 36)));
+      for (let i = 0; i < k; i++) pts.push(P((a * i) / k, R * 0.45), P((a * (i + 1)) / k, R * 0.45));
+    }
+    protArc.geometry.setFromPoints(pts);
+    protArc.visible = true;
+  },
+  radius() { return view.dist * 0.07; },
+  down(ev) {
+    if (this.st === 0) {
+      const r = inferPoint(ev);
+      if (!r) return;
+      this.c = r.p.clone();
+      const hit = pickFace(ev);
+      this.n = lockAxis != null ? AXES[lockAxis].clone() : hit ? V3(hit.face.n) : AXES[2].clone();
+      this.u = null;
+      this.st = 1;
+      return;
+    }
+    const p = this.onPlane(ev);
+    if (!p) return;
+    if (this.st === 1) {
+      const u = p.sub(this.c);
+      if (u.length() < 1e-6) return;
+      this.u = u.normalize();
+      this.st = 2;
+      return;
+    }
+    this.place(this.ang);
+  },
+  place(a) {
+    const d = this.dir(a), box = G.bboxOf(model);
+    const L = Math.max(20, box.isEmpty() ? 0 : box.getSize(new THREE.Vector3()).length() * 1.5);
+    model.guides.push({ id: model.nextId++, a: A(this.c.clone().addScaledVector(d, -L)), b: A(this.c.clone().addScaledVector(d, L)) });
+    toast(`Garis bantu ${fmtNum(+THREE.MathUtils.radToDeg(a).toFixed(2))}°`);
+    this.cancel();
+    changed();
+  },
+  move(ev) {
+    if (this.st === 0) {
+      const r = inferPoint(ev);
+      showSnap(r);
+      if (r) {
+        this.c = r.p.clone();
+        const hit = pickFace(ev);
+        this.n = lockAxis != null ? AXES[lockAxis].clone() : hit ? V3(hit.face.n) : AXES[2].clone();
+        this.u = null;
+        this.drawArc(this.radius());
+        requestRender();
+      }
+      return;
+    }
+    hideSnap();
+    const p = this.onPlane(ev);
+    if (!p) return;
+    const v = p.clone().sub(this.c);
+    if (v.length() < 1e-6) return;
+    const R = this.radius();
+    if (this.st === 1) {
+      this.u = v.clone().normalize();
+      guide2.geometry.setFromPoints([this.c, this.c.clone().addScaledVector(this.u, R * 1.4)]);
+      guide2.computeLineDistances();
+      guide2.visible = true;
+      this.drawArc(R);
+      setMeasure('0°');
+    } else {
+      let a = Math.atan2(v.dot(this.w()), v.dot(this.u));
+      if (!ev.shiftKey) a = Math.round(a / (Math.PI / 12)) * (Math.PI / 12);
+      this.ang = a;
+      guide.geometry.setFromPoints([this.c, this.c.clone().addScaledVector(this.dir(a), Math.max(R * 1.4, v.length()))]);
+      guide.material.color.set('#e8590c');
+      guide.visible = true;
+      this.drawArc(R, a);
+      setMeasure(`${fmtNum(+THREE.MathUtils.radToDeg(a).toFixed(2))}°`);
+    }
+    requestRender();
+  },
+  onVCB(t) {
+    if (this.st !== 2) return;
+    const deg = parseFloat(String(t).replace(',', '.').replace('°', ''));
+    if (Number.isFinite(deg)) this.place(THREE.MathUtils.degToRad(deg));
   },
   onLock() { lastEv && this.move(lastEv); },
 };
@@ -3536,7 +4023,7 @@ tools.offset = {
   cancel() { this.st = null; },
   down(ev) {
     if (this.st) return this.commit(this.st.d);
-    const hit = pickFace(ev);
+    const hit = pickFace(ev, null, true);
     if (!hit) return;
     if (topOf(hit.face) != null) return toast('Klik ganda grup untuk mengeditnya dulu');
     this.st = { id: hit.faceId, plane: { p: hit.point.clone(), n: V3(hit.face.n) }, d: 0 };
@@ -3589,7 +4076,7 @@ tools.follow = {
   hint: 'Pilih jalur dulu dengan alat Pilih (garis tersambung atau satu bidang), lalu klik bidang profil di ujung jalur.',
   move(ev) { hoverFace(ev, '#7fb0ff'); },
   down(ev) {
-    const hit = pickFace(ev);
+    const hit = pickFace(ev, null, true);
     if (!hit) return;
     const selLines = model.lines.filter((l) => selection.has(l.id));
     let path = null;
@@ -4024,7 +4511,7 @@ tools.smoove = {
   },
   down(ev) {
     if (this.st) return this.commit(this.st.h);
-    const hit = pickFace(ev);
+    const hit = pickFace(ev, null, true);
     if (!hit || hit.face.solid == null) return toast('Klik bidang medan atau benda solid');
     const g = gOf(hit.face) != null ? model.groups[gOf(hit.face)] : null;
     const terrain = !!(g && g.terrain);
@@ -4104,7 +4591,7 @@ tools.pan = {
 };
 
 // ======================= Toolbar =======================
-const order = ['select', 'line', 'arc', 'spline', 'freehand', 'rect', 'rrect', 'wall', 'pintu', 'jendela', 'room', 'circle', 'polygon', '|', 'sphere', 'cone', 'capsule', 'torus', '|', 'pushpull', 'offset', 'follow', '|', 'move', 'rotate', 'scale', '|', 'eraser', 'paint', '|', 'tape', 'dim', 'text', 'section', 'text3d', 'lamp', '|', 'terrain', 'smoove', '|', 'orbit', 'pan', 'look', 'walk', 'poscam'];
+const order = ['select', 'line', 'arc', 'spline', 'freehand', 'rect', 'rrect', 'wall', 'pintu', 'jendela', 'room', 'circle', 'polygon', '|', 'sphere', 'cone', 'capsule', 'torus', '|', 'pushpull', 'offset', 'follow', '|', 'move', 'rotate', 'scale', '|', 'eraser', 'paint', 'texpaint', '|', 'tape', 'protractor', 'dim', 'text', 'section', 'text3d', 'lamp', '|', 'terrain', 'smoove', '|', 'orbit', 'pan', 'look', 'walk', 'poscam'];
 for (const name of order) {
   const tb = $('toolbar');
   if (name === '|') {
@@ -4364,8 +4851,8 @@ function reverseSel() {
   toast('Arah bidang dibalik');
 }
 function openCtx(ev) {
-  const lid = pickLine(ev);
-  const hit = pickFace(ev);
+  const lid = pickLine(ev, true);
+  const hit = pickFace(ev, null, true);
   const id = lid != null ? lid : hit ? hit.faceId : null;
   if (id != null && !selection.has(id)) {
     const t = topOf(entityOf(id));
@@ -4413,12 +4900,20 @@ function openCtx(ev) {
     add('Salinan Cermin Bertaut (merah)', () => mirrorLinked(0), 'Ctrl+Shift+M');
     sep();
     add('Zoom ke Pilihan', zoomSelection);
+    add(isolate ? 'Keluar dari Isolasi' : 'Isolasi Pilihan', toggleIsolate, 'I');
+    if (selUnits().length >= 2) {
+      add('Ratakan Bawah (menapak)', () => alignSel('z-min'));
+      add('Ratakan & Sebar…', () => openPalette('rata'), 'F3');
+    }
     add('Info Entitas', () => showTray('info'));
   } else {
     if (editGroup != null) add('Tutup Grup', exitEdit, 'Esc');
     add('Pilih Semua', () => handleMenu('selectAll'), 'Ctrl+A');
     add('Tampilkan Semua', unhideAll, 'Ctrl+Shift+H');
     add('Zoom Semua', zoomExtents, 'Shift+Z');
+    if (isolate) add('Keluar dari Isolasi', toggleIsolate, 'I');
+    add('Bersihkan Model…', openClean);
+    add('Cari Perintah…', () => openPalette(), 'F3');
     add('Tambah Adegan', addScene);
   }
   const box = $('ctxmenu');
@@ -4445,6 +4940,7 @@ let nav = null;
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('pointerdown', (ev) => {
   playing = false;
+  if (animPlaying && !animPlaying.rec) animPause();
   lastEv = ev;
   canvas.focus();
   let mode = null;
@@ -4518,15 +5014,28 @@ canvas.addEventListener(
 );
 
 // ======================= Keyboard =======================
+// Perintah (bukan alat) yang juga bisa diberi tombol tunggal di dialog pintasan.
+const EXTRA_CMDS = {
+  'cmd:isolate': { label: 'Isolasi pilihan / kembali', key: 'i', run: () => toggleIsolate() },
+  'cmd:palette': { label: 'Cari perintah', key: '', run: () => openPalette() },
+  'cmd:quad': { label: 'Tampilan 4 jendela', key: '', run: () => toggleQuad() },
+  'cmd:zoomSel': { label: 'Zoom ke pilihan', key: '', run: () => zoomSelection() },
+  'cmd:hide': { label: 'Sembunyikan pilihan', key: '', run: () => hideSelection() },
+  'cmd:timeline': { label: 'Timeline animasi', key: '', run: () => toggleTimeline() },
+  'cmd:animPlay': { label: 'Putar / jeda animasi', key: '', run: () => { toggleTimeline(true); animPlayToggle(); } },
+  'cmd:theme': { label: 'Tema gelap / terang', key: '', run: () => setTheme(!document.body.classList.contains('dark')) },
+};
+const keyables = () => [...Object.entries(tools).filter(([n]) => n !== 'place'), ...Object.entries(EXTRA_CMDS)];
+const keyItem = (n) => tools[n] || EXTRA_CMDS[n];
 const keyTools = {};
-const defaultKeys = Object.fromEntries(Object.entries(tools).map(([n, t]) => [n, t.key || '']));
+const defaultKeys = Object.fromEntries(keyables().map(([n, t]) => [n, t.key || '']));
 function loadKeys() {
   let custom = {};
   try {
     custom = JSON.parse(localStorage.getItem('sketchclone.keys') || '{}');
   } catch {}
   for (const k of Object.keys(keyTools)) delete keyTools[k];
-  for (const [n, t] of Object.entries(tools)) {
+  for (const [n, t] of keyables()) {
     t.key = custom[n] !== undefined ? custom[n] : defaultKeys[n];
     if (t.key) keyTools[t.key] = n;
   }
@@ -4538,8 +5047,10 @@ function loadKeys() {
 function openKeys() {
   const box = $('keyList');
   box.replaceChildren();
-  for (const [n, t] of Object.entries(tools)) {
-    if (n === 'place') continue;
+  const head = (t) => box.append(mkEl('div', { className: 'khead', textContent: t }));
+  head('Alat');
+  for (const [n, t] of keyables()) {
+    if (n === 'cmd:isolate') head('Perintah');
     const inp = mkEl('input', { value: t.key === ' ' ? 'Spasi' : (t.key || '').toUpperCase(), maxLength: 5, className: 'keyin' });
     inp.addEventListener('keydown', (e) => {
       e.stopPropagation();
@@ -4551,6 +5062,14 @@ function openKeys() {
     inp.dataset.tool = n;
     box.append(mkEl('label', { className: 'krow' }, mkEl('span', { textContent: t.label.replace(/\s*\(.*\)$/, '') }), inp));
   }
+  // Menu melingkar (tahan Tab): 8 isi yang bisa diatur
+  head('Menu melingkar (tahan Tab di layar 3D)');
+  const opts = pieChoices();
+  pieSlots().forEach((cur, i) => {
+    const sel = mkEl('select', { className: 'piesel' }, ...opts.map(([v, l]) => mkEl('option', { value: v, textContent: l })));
+    sel.value = cur;
+    box.append(mkEl('label', { className: 'krow' }, mkEl('span', { textContent: `Posisi ${i + 1} (${PIE_DIRS[i]})` }), sel));
+  });
   $('keyDlg').hidden = false;
 }
 function saveKeys() {
@@ -4558,11 +5077,12 @@ function saveKeys() {
   for (const inp of document.querySelectorAll('#keyList .keyin')) {
     const v = inp.value === 'Spasi' ? ' ' : inp.value.toLowerCase();
     if (v && used.has(v)) return toast(`Tombol "${inp.value}" dipakai dua kali (${used.get(v)})`);
-    if (v) used.set(v, tools[inp.dataset.tool].label);
+    if (v) used.set(v, keyItem(inp.dataset.tool).label);
     map[inp.dataset.tool] = v;
   }
   try {
     localStorage.setItem('sketchclone.keys', JSON.stringify(map));
+    localStorage.setItem('sketchclone.pie', JSON.stringify([...document.querySelectorAll('#keyList .piesel')].map((s) => s.value)));
   } catch {}
   loadKeys();
   $('keyDlg').hidden = true;
@@ -4607,6 +5127,7 @@ window.addEventListener('keydown', (ev) => {
     closeCtx();
     if (vcbText) vcbText = '';
     else if (tool === tools.select && editGroup != null) exitEdit();
+    else if (tool === tools.select && isolate) toggleIsolate();
     else {
       const wasLine = tool === tools.line;
       cancelTool();
@@ -4643,8 +5164,19 @@ window.addEventListener('keydown', (ev) => {
     return;
   }
   if (k === 'Z' && ev.shiftKey) return;
+  if (tool === tools.texpaint && (k === '[' || k === ']')) {
+    brush.size = Math.max(0.005, Math.min(0.3, brush.size * (k === ']' ? 1.25 : 0.8)));
+    syncPaintDlg();
+    lastEv && tool.move(lastEv);
+    return;
+  }
+  if (k === 'Tab') {
+    ev.preventDefault();
+    if (!ev.repeat) openPie();
+    return;
+  }
   const name = keyTools[k.toLowerCase()];
-  if (name && !ev.shiftKey) setTool(name);
+  if (name && !ev.shiftKey) name.startsWith('cmd:') ? EXTRA_CMDS[name].run() : setTool(name);
 });
 
 // ======================= Berkas & menu =======================
@@ -4654,6 +5186,11 @@ async function confirmDiscard() {
 
 function loadModel(m) {
   cancelTool();
+  if (animPlaying) cancelAnimationFrame(animPlaying.raf), (animPlaying = null);
+  animTeardown();
+  animT = 0;
+  isolate = null;
+  showIsoChip(false);
   playing = false;
   activeScene = -1;
   model = G.normalizeModel(m);
@@ -4782,7 +5319,7 @@ async function checkRecovery() {
 async function exportPNG(scale = 2, toFile = true) {
   const pr = renderer.getPixelRatio();
   renderer.setPixelRatio(pr * scale);
-  renderer.setSize(stage.clientWidth, stage.clientHeight, false);
+  renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
   if (styleOf(model).ao) {
     aoInteract = false;
     renderAO();
@@ -4816,7 +5353,7 @@ async function exportPNG(scale = 2, toFile = true) {
     g.fillText(el.textContent, x, y - 2 * k);
   }
   renderer.setPixelRatio(pr);
-  renderer.setSize(stage.clientWidth, stage.clientHeight, false);
+  renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
   requestRender();
   if (toFile === 'url') return c2.toDataURL('image/jpeg', 0.9);
   const blob = await new Promise((r) => c2.toBlob(r, 'image/png'));
@@ -4837,6 +5374,7 @@ const HELP = `<h3>Pintasan Keyboard</h3><table>
 <tr><td>→ ← ↑</td><td>Kunci sumbu merah / hijau / biru (↓ lepas)</td></tr>
 <tr><td>Angka + Enter</td><td>Ukuran tepat (m, cm, mm). Persegi: 3,2 atau 3;2</td></tr>
 <tr><td>T</td><td>Pita ukur + garis bantu</td></tr><tr><td>Klik ganda</td><td>Pilih objek / masuk-keluar grup</td></tr><tr><td>Ctrl+G / Ctrl+Shift+G</td><td>Buat grup / komponen (Ctrl+Shift+E: urai)</td></tr><tr><td>Ctrl+klik (Pindah)</td><td>Salin objek (Ctrl+D: duplikat)</td></tr><tr><td>A / G / F / W</td><td>Busur / Poligon (8s = 8 sisi) / Offset / Follow Me</td></tr><tr><td>D / X</td><td>Dimensi / Teks</td></tr><tr><td>N</td><td>Bidang potong (section plane)</td></tr><tr><td>Edit → Solid</td><td>Gabung / Kurangi / Irisan dua benda</td></tr><tr><td>Ctrl+Shift+K</td><td>Konsol skrip &amp; plugin</td></tr><tr><td>K / J / U</td><td>Lihat Sekeliling / Jalan / Posisi Kamera</td></tr><tr><td>Ctrl + Pindah/Putar</td><td>Salin, lalu ketik 5x (larik) atau /5 (bagi rata)</td></tr><tr><td>Y / Z / V</td><td>Teks 3D / Medan baru / Smoove</td></tr><tr><td>Seret kotak</td><td>Kiri→kanan: di dalam · kanan→kiri: menyentuh</td></tr><tr><td>Klik kanan</td><td>Menu konteks (orbit: seret tombol kanan/tengah)</td></tr><tr><td>Ctrl+Shift+R</td><td>Bulatkan sudut bidang/benda terpilih (radius)</td></tr><tr><td>Ctrl+Shift+B / U</td><td>Bulatkan semua rusuk / Haluskan permukaan</td></tr><tr><td>Skala + panah</td><td>Skala satu sumbu (negatif = cermin)</td></tr><tr><td>Ctrl+Shift+D</td><td>Lentur / Runcing / Puntir</td></tr><tr><td>Ctrl+Shift+M</td><td>Salinan cermin bertaut (simetri)</td></tr><tr><td>Ctrl+Shift+I</td><td>Potong bersilangan (Intersect)</td></tr><tr><td>Ctrl+Shift+J</td><td>Asisten AI (teks/gambar → model)</td></tr><tr><td>Ctrl+P</td><td>Gambar kerja PDF</td></tr><tr><td>Delete</td><td>Hapus pilihan</td></tr><tr><td>Ctrl+Z / Ctrl+Y</td><td>Urungkan / Ulangi</td></tr>
+<tr><td>F3</td><td>Cari perintah (semua menu, alat, pustaka)</td></tr><tr><td>I</td><td>Isolasi pilihan / kembali (Esc juga keluar)</td></tr><tr><td>Tab (tahan)</td><td>Menu melingkar: arahkan mouse ke alat lalu lepas Tab (atur isinya di Bantuan → Ubah Pintasan)</td></tr><tr><td>Busur derajat</td><td>Garis bantu bersudut (tiap 15°, Shift: bebas, ketik sudut + Enter)</td></tr><tr><td>Ctrl+Spasi</td><td>Putar / jeda animasi (panel Animasi, ◆ Kunci di timeline)</td></tr><tr><td>Tampilan → 4 Jendela</td><td>Perspektif + Atas, Depan, Kanan sekaligus</td></tr><tr><td>Edit → Ratakan &amp; Sebar</td><td>Ratakan tepi/tengah atau sebar rata objek terpilih</td></tr><tr><td>Edit → Bersihkan Model</td><td>Hapus yang tak terpakai, rapikan titik, perbaiki arah bidang</td></tr>
 <tr><td>Ctrl+S / Ctrl+O</td><td>Simpan / Buka</td></tr><tr><td>Shift+Z</td><td>Zoom semua</td></tr><tr><td>Esc</td><td>Batal</td></tr></table>
 <p style="color:#6b7686">Tekan Esc untuk menutup.</p>`;
 
@@ -4885,6 +5423,1032 @@ function solidOp(op) {
   selection = new Set();
   changed();
   toast({ union: 'Benda digabung', subtract: 'Benda kedua dikurangkan dari benda pertama', intersect: 'Irisan dibuat' }[op]);
+}
+
+// ---- Kerapian: isolasi, ratakan & sebar, bersihkan model, cari perintah ----
+function showIsoChip(on) {
+  let el = $('isoChip');
+  if (!on) return el && (el.hidden = true);
+  if (!el) {
+    el = mkEl('div', { id: 'isoChip' }, mkEl('span', { textContent: 'Mode isolasi: hanya pilihan yang tampil' }), mkEl('button', { textContent: 'Keluar (I)', onclick: () => toggleIsolate() }));
+    stage.append(el);
+  }
+  el.hidden = false;
+}
+function toggleIsolate() {
+  if (isolate) {
+    const c = isolate.cam;
+    isolate = null;
+    view.target.fromArray(c.target);
+    Object.assign(view, { dist: c.dist, az: c.az, el: c.el });
+    snapCache = null;
+    refresh();
+    updateCamera();
+    showIsoChip(false);
+    return toast('Semua objek tampil kembali');
+  }
+  if (!selection.size) return toast('Pilih objek yang ingin diisolasi dulu');
+  isolate = { ids: expand(selection), max: model.nextId, cam: { target: view.target.toArray(), dist: view.dist, az: view.az, el: view.el } };
+  snapCache = null;
+  refresh();
+  zoomSelection();
+  showIsoChip(true);
+}
+
+// Unit yang digerakkan utuh: tiap grup/komponen teratas, tiap benda solid lepas, sisa geometri lepas jadi satu unit.
+function selUnits() {
+  const { tops, loose } = selectedTops();
+  const units = [...tops].map((g) => G.entitiesInTree(model, g));
+  const bySolid = new Map();
+  for (const e of loose) {
+    const k = e.solid != null ? 's' + e.solid : 'lepas';
+    if (!bySolid.has(k)) bySolid.set(k, new Set());
+    bySolid.get(k).add(e.id);
+  }
+  return [...units, ...bySolid.values()];
+}
+const ALIGN_TXT = { min: ['kiri', 'depan', 'bawah'], mid: ['tengah', 'tengah', 'tengah'], max: ['kanan', 'belakang', 'atas'] };
+function alignSel(arg) {
+  const [a, mode] = String(arg).split('-'), axis = 'xyz'.indexOf(a);
+  const units = selUnits();
+  if (units.length < (mode === 'spread' ? 3 : 2))
+    return toast(mode === 'spread' ? 'Pilih minimal 3 objek untuk disebar rata' : 'Pilih minimal 2 objek (grup, komponen, atau benda) untuk diratakan');
+  const n = alignUnits(model, units, axis, mode);
+  if (!n) return toast('Objek sudah rata');
+  changed();
+  const sumbu = ['merah', 'hijau', 'biru'][axis];
+  toast(mode === 'spread' ? `${units.length} objek disebar rata di sumbu ${sumbu}` : `${n} objek diratakan ${ALIGN_TXT[mode][axis]} (sumbu ${sumbu})`);
+}
+
+// Bersihkan Model: laporan + centang perbaikan
+let cleanRep = null;
+function openClean() {
+  const levelTags = C.levelsOf(model).map((l) => l.tag).filter((t) => t != null);
+  const nameOf = (f) => {
+    let g = f.group ?? null;
+    while (g != null && model.groups[g]?.parent != null) g = model.groups[g].parent;
+    return g != null ? model.groups[g]?.name || 'Grup' : 'Geometri lepas';
+  };
+  cleanRep = analyzeModel(model, { levelTags, textures, nameOf });
+  const r = cleanRep, box = $('cleanList');
+  box.replaceChildren();
+  const rows = [
+    ['tags', 'Tag tidak terpakai', r.unusedTags.length, 'Tag tanpa objek (tag lantai tetap aman)'],
+    ['textures', 'Tekstur impor tidak terpakai', r.unusedTextures.length, 'Gambar tekstur yang tidak dipakai bidang mana pun'],
+    ['lines', 'Garis nyasar', r.shortLines.length + r.dupLines.length, `${r.shortLines.length} sangat pendek (< 0,5 mm), ${r.dupLines.length} kembar/bertumpuk`],
+    ['faces', 'Bidang rusak / kembar', r.badFaces.length + r.dupFaces.length, `${r.badFaces.length} luasnya nol, ${r.dupFaces.length} bertumpuk persis`],
+    ['weld', 'Titik hampir berimpit', r.nearPoints, 'Titik berselisih < 0,2 mm disatukan (menutup celah tipis)'],
+    ['normals', 'Arah bidang terbalik', r.flipFaces.size, `${r.flippedSolids} benda tertutup punya sisi yang menghadap ke dalam`],
+  ];
+  let any = false;
+  for (const [k, label, n, desc] of rows) {
+    const cb = mkEl('input', { type: 'checkbox', checked: n > 0, disabled: !n });
+    cb.dataset.fix = k;
+    any ||= n > 0;
+    box.append(mkEl('label', { className: 'crow' + (n ? '' : ' ok') }, cb, mkEl('b', { textContent: n ? String(n) : '✓' }), mkEl('span', { textContent: label }), mkEl('small', { textContent: n ? desc : 'bersih' })));
+  }
+  if (r.openSolids.length) {
+    // dikelompokkan per objek teratas agar model dari pustaka (banyak bagian) tidak memenuhi daftar
+    const byName = new Map();
+    for (const o of r.openSolids) {
+      const k = o.name || 'Benda';
+      const g = byName.get(k) || { n: 0, open: 0, ids: [] };
+      g.n++, (g.open += o.open), g.ids.push(...o.ids);
+      byName.set(k, g);
+    }
+    box.append(mkEl('div', { className: 'ctt', textContent: `Benda tidak tertutup rapat — penting untuk cetak 3D & operasi Solid (perbaiki manual; permukaan terbuka yang disengaja boleh diabaikan):` }));
+    const list = [...byName].sort((x, y) => y[1].open - x[1].open);
+    for (const [name, g] of list.slice(0, 12)) {
+      box.append(mkEl('div', { className: 'crow open' }, mkEl('span', { textContent: `${name} — ${g.n > 1 ? g.n + ' bagian, ' : ''}${g.open} rusuk terbuka` }), mkEl('button', {
+        textContent: 'Pilih & lihat',
+        onclick: () => { selection = new Set(g.ids); refresh(); updateInfo(); zoomSelection(); },
+      })));
+    }
+    if (list.length > 12) box.append(mkEl('div', { className: 'muted', textContent: `… dan ${list.length - 12} objek lainnya` }));
+  }
+  if (!any && !r.openSolids.length) box.append(mkEl('div', { className: 'ctt', textContent: 'Model sudah rapi, tidak ada yang perlu dibersihkan.' }));
+  $('cleanOk').disabled = !any;
+  $('cleanDlg').hidden = false;
+}
+function applyClean() {
+  if (!cleanRep) return;
+  const fix = {};
+  for (const cb of document.querySelectorAll('#cleanList input[data-fix]')) fix[cb.dataset.fix] = cb.checked && !cb.disabled;
+  const d = cleanModel(model, cleanRep, fix, { textures });
+  selection = new Set();
+  changed();
+  const parts = [d.tags && `${d.tags} tag`, d.textures && `${d.textures} tekstur`, d.lines && `${d.lines} garis`, d.faces && `${d.faces} bidang`, d.weld && `${d.weld} titik disatukan`, d.normals && `${d.normals} bidang dibalik`].filter(Boolean);
+  toast(parts.length ? 'Dibersihkan: ' + parts.join(', ') : 'Tidak ada yang diubah');
+  openClean();
+}
+$('cleanOk').onclick = applyClean;
+$('pdColor').oninput = (e) => (brush.color = e.target.value);
+$('pdSize').oninput = (e) => { brush.size = +e.target.value / 200; $('pdSizeV').textContent = `${e.target.value} cm`; };
+$('pdOp').oninput = (e) => (brush.opacity = +e.target.value / 100);
+$('pdHard').oninput = (e) => (brush.hard = +e.target.value / 100);
+$('pdMode').onchange = (e) => (brush.erase = e.target.value === 'hapus');
+$('pdClear').onclick = clearPaintSel;
+$('cleanClose').onclick = () => ($('cleanDlg').hidden = true);
+
+// Cari perintah (F3): semua menu, alat, dan isi pustaka dalam satu kotak pencarian
+let palItems = [], palShown = [], palIdx = 0;
+const palNorm = (t) => t.toLowerCase().replace(/[.…]+$/g, '');
+const palRecent = () => { try { return JSON.parse(localStorage.getItem('sketchclone.cmdRecent') || '[]'); } catch { return []; } };
+async function openPalette(q = '') {
+  const items = [];
+  try {
+    for (const it of await window.api.menuItems()) items.push({ label: it.path, key: it.accel.replace('CmdOrCtrl', 'Ctrl'), run: () => window.api.menuRun(it.id) });
+  } catch {}
+  items.push({ label: 'Tampilan › ' + (isolate ? 'Keluar dari Isolasi' : 'Isolasi Pilihan'), key: 'I', run: toggleIsolate });
+  for (const [n, t] of Object.entries(tools)) {
+    if (n === 'place') continue;
+    items.push({ label: 'Alat › ' + t.label.replace(/\s*\(.*\)$/, ''), key: t.key ? (t.key === ' ' ? 'Spasi' : t.key.toUpperCase()) : '', run: () => setTool(n) });
+  }
+  for (const [k, it] of Object.entries(LIBRARY))
+    items.push({ label: 'Pustaka › ' + it.name, key: '', run: () => startPlace({ label: it.name, gen: (m, at, n, angle) => insertLibrary(m, k, at, angle, editGroup) }) });
+  palItems = items;
+  $('cmdPal').hidden = false;
+  const inp = $('cmdIn');
+  inp.value = q;
+  inp.focus();
+  renderPalette();
+}
+function renderPalette() {
+  const q = palNorm($('cmdIn').value).split(/\s+/).filter(Boolean), recent = palRecent();
+  const scored = [];
+  palItems.forEach((it, i) => {
+    const L = palNorm(it.label), words = L.split(/[\s›/()\-,]+/);
+    let sc = 0;
+    for (const t of q) {
+      if (!L.includes(t)) return;
+      sc += words.some((w) => w.startsWith(t)) ? 3 : 1;
+      if (L.split(' › ').pop().startsWith(t)) sc += 2;
+    }
+    const r = recent.indexOf(it.label);
+    if (r >= 0) sc += q.length ? 1.5 : 20 - r;
+    if (!q.length && r < 0 && it.label.startsWith('Pustaka')) return;
+    scored.push([sc, i, it]);
+  });
+  scored.sort((a, b) => b[0] - a[0] || a[1] - b[1]);
+  palShown = scored.slice(0, 14).map((x) => x[2]);
+  palIdx = 0;
+  drawPalette();
+}
+function drawPalette() {
+  const box = $('cmdList');
+  box.replaceChildren();
+  if (!palShown.length) box.append(mkEl('div', { className: 'muted', textContent: 'Tidak ada perintah yang cocok' }));
+  palShown.forEach((it, i) => {
+    const parts = it.label.split(' › '), last = parts.pop();
+    box.append(mkEl('button', { className: i === palIdx ? 'on' : '', onclick: () => runPalette(i), onmousemove: () => { if (palIdx !== i) { palIdx = i; drawPalette(); } } },
+      mkEl('span', {}, mkEl('small', { textContent: parts.length ? parts.join(' › ') + ' › ' : '' }), document.createTextNode(last)),
+      mkEl('kbd', { textContent: it.key || '' })));
+  });
+}
+function closePalette() {
+  $('cmdPal').hidden = true;
+  canvas.focus();
+}
+function runPalette(i) {
+  const it = palShown[i];
+  if (!it) return;
+  closePalette();
+  try {
+    localStorage.setItem('sketchclone.cmdRecent', JSON.stringify([it.label, ...palRecent().filter((x) => x !== it.label)].slice(0, 8)));
+  } catch {}
+  it.run();
+}
+$('cmdIn').addEventListener('input', renderPalette);
+$('cmdIn').addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (palShown.length) palIdx = (palIdx + (e.key === 'ArrowDown' ? 1 : -1) + palShown.length) % palShown.length;
+    drawPalette();
+    const on = $('cmdList').querySelector('.on');
+    on && on.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    runPalette(palIdx);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closePalette();
+  }
+});
+window.addEventListener('pointerdown', (e) => {
+  if (!$('cmdPal').hidden && !e.target.closest('#cmdPal')) closePalette();
+});
+
+// ---- Menu melingkar (tahan Tab): 8 alat/perintah favorit di sekitar kursor ----
+const PIE_DIRS = ['kanan', 'kanan atas', 'atas', 'kiri atas', 'kiri', 'kiri bawah', 'bawah', 'kanan bawah'];
+const PIE_DEFAULT = ['move', 'rotate', 'select', 'line', 'rect', 'pushpull', 'eraser', 'paint'];
+function pieChoices() {
+  return [['', '(kosong)'], ...keyables().map(([n, t]) => [n, (n.startsWith('cmd:') ? 'Perintah: ' : '') + t.label.replace(/\s*\(.*\)$/, '')])];
+}
+function pieSlots() {
+  try {
+    const v = JSON.parse(localStorage.getItem('sketchclone.pie') || 'null');
+    if (Array.isArray(v) && v.length === 8) return v.map((n) => (n && keyItem(n) ? n : ''));
+  } catch {}
+  return PIE_DEFAULT;
+}
+let pie = null;
+function openPie() {
+  if (pie || !$('cmdPal').hidden) return;
+  const r = stage.getBoundingClientRect(), R = 100;
+  const x = Math.max(R + 50, Math.min(r.width - R - 50, (lastEv ? lastEv.clientX : r.left + r.width / 2) - r.left));
+  const y = Math.max(R + 20, Math.min(r.height - R - 20, (lastEv ? lastEv.clientY : r.top + r.height / 2) - r.top));
+  const slots = pieSlots();
+  const el = mkEl('div', { id: 'pie', style: `left:${x}px;top:${y}px` }, mkEl('div', { className: 'piec' }));
+  const btns = slots.map((n, i) => {
+    if (!n) return null;
+    const it = keyItem(n), a = (i * Math.PI) / 4;
+    const b = mkEl('button', { className: 'pieb', style: `left:${Math.cos(a) * R}px;top:${-Math.sin(a) * R}px`, onclick: () => runPie(i) },
+      mkEl('span', { textContent: it.label.replace(/\s*\(.*\)$/, '') }), it.key ? mkEl('kbd', { textContent: it.key === ' ' ? 'Spasi' : it.key.toUpperCase() }) : null);
+    el.append(b);
+    return b;
+  });
+  stage.append(el);
+  pie = { el, slots, btns, cx: r.left + x, cy: r.top + y, idx: -1, t: performance.now() };
+}
+function pieMove(e) {
+  if (!pie) return;
+  const dx = e.clientX - pie.cx, dy = e.clientY - pie.cy;
+  let idx = -1;
+  if (Math.hypot(dx, dy) > 30) {
+    idx = ((Math.round(Math.atan2(-dy, dx) / (Math.PI / 4)) % 8) + 8) % 8;
+    if (!pie.slots[idx]) idx = -1;
+  }
+  if (idx === pie.idx) return;
+  pie.idx = idx;
+  pie.btns.forEach((b, i) => b && b.classList.toggle('on', i === idx));
+}
+function closePie() {
+  if (!pie) return;
+  pie.el.remove();
+  pie = null;
+}
+function runPie(i) {
+  const n = pie && pie.slots[i];
+  closePie();
+  if (!n) return;
+  if (n.startsWith('cmd:')) EXTRA_CMDS[n].run();
+  else setTool(n);
+}
+window.addEventListener('pointermove', pieMove);
+window.addEventListener('keyup', (e) => {
+  if (e.key !== 'Tab' || !pie) return;
+  if (pie.idx >= 0) runPie(pie.idx);
+  else if (performance.now() - pie.t > 300) closePie(); // ditekan sebentar: menu tetap terbuka, pilih dengan klik
+});
+window.addEventListener('keydown', (e) => {
+  if (pie && e.key === 'Escape') {
+    closePie();
+    e.stopImmediatePropagation();
+  }
+}, true);
+window.addEventListener('pointerdown', (e) => {
+  if (pie && !e.target.closest('#pie')) closePie();
+}, true);
+
+// ---- Info Entitas: posisi & ukuran bisa diketik, panjang/luas/volume, material ----
+function infoMeasure(P, ids, loose) {
+  const box = G.bboxOf(model, ids);
+  if (box.isEmpty()) return;
+  const sz = box.getSize(new THREE.Vector3());
+  const lenIn = (val, apply) => mkEl('input', {
+    value: fmt(val),
+    onkeydown: (e) => e.key === 'Enter' && e.target.blur(),
+    onchange: (e) => {
+      const [v] = parseNums(String(e.target.value).trim());
+      if (!Number.isFinite(v)) return toast('Angka tidak dikenali (contoh: 120cm, 1.2, 3m)');
+      apply(v);
+    },
+  });
+  const ax = ['x', 'y', 'z'];
+  const grid3 = (vals, apply) => mkEl('span', { className: 'xyz' }, ...vals.map((v, i) => lenIn(v, (nv) => apply(i, nv))));
+  P.append(trow('Posisi', grid3([box.min.x, box.min.y, box.min.z], (i, v) => {
+    const d = new THREE.Vector3();
+    d[ax[i]] = v - box.min[ax[i]];
+    G.translate(model, ids, d);
+    changed();
+  })));
+  const prop = mkEl('input', { type: 'checkbox', checked: infoProp });
+  prop.onchange = () => (infoProp = prop.checked);
+  P.append(trow('Ukuran', grid3([sz.x, sz.y, sz.z], (i, v) => {
+    const old = sz[ax[i]];
+    if (!(v > 1e-6) || old < 1e-6) return toast('Ukuran harus lebih dari 0 (bidang datar tidak bisa ditebalkan di sini)');
+    const f = v / old, s = infoProp ? [f, f, f] : [1, 1, 1].map((x, j) => (j === i ? f : x));
+    G.scaleAxes(model, ids, box.min.clone(), s[0], s[1], s[2]);
+    changed();
+  })));
+  P.append(mkEl('label', { className: 'row' }, mkEl('span'), mkEl('span', { className: 'small muted' }, prop, ' ubah ukuran proporsional')));
+  const lines = loose.filter((e) => e.a), faces = [...ids].map(faceById).filter(Boolean);
+  if (lines.length && lines.length === loose.length && ids.size === lines.length) {
+    const L = lines.reduce((t, l) => t + V3(l.a).distanceTo(V3(l.b)), 0);
+    P.append(trow(lines.length > 1 ? 'Panjang total' : 'Panjang', mkEl('span', { textContent: fmt(L) })));
+  }
+  if (faces.length) {
+    const vol = faces.length <= 60000 ? closedVolume(faces) : null;
+    if (vol != null) P.append(trow('Volume', mkEl('span', { textContent: `${fmtNum(+vol.toFixed(4))} m³` })));
+    const mats = new Map();
+    for (const f of faces) {
+      const k = f.tex || f.color;
+      if (!mats.has(k)) mats.set(k, f);
+    }
+    if (mats.size === 1) {
+      const f = [...mats.values()][0];
+      P.append(trow('Material', mkEl('span', { className: 'matv' }, mkEl('i', { style: `background:${f.color}` }), f.tex ? textures.get(f.tex)?.name || 'Tekstur' : f.color)));
+    } else P.append(trow('Material', mkEl('span', { textContent: `${mats.size} material` })));
+  }
+}
+let infoProp = false;
+
+// ---- Statistik model (Info, tanpa pilihan) ----
+function infoStats(P) {
+  let tris = 0;
+  const verts = new Set(), mats = new Set();
+  for (const f of model.faces) {
+    tris += f.pts.length - 2 + (f.holes || []).reduce((t, h) => t + h.length + 2, 0);
+    for (const p of f.pts) verts.add(G.key(p));
+    mats.add(f.tex || f.color);
+  }
+  const gs = Object.values(model.groups), defs = new Set(gs.filter((g) => g.def).map((g) => g.def));
+  const texN = [...textures.keys()].filter((k) => String(k).startsWith('u:') && model.faces.some((f) => f.tex === k)).length;
+  P.append(mkEl('div', { className: 'ttl', style: 'margin-top:14px', textContent: 'Statistik Model' }));
+  P.append(mkEl('div', {
+    className: 'kv',
+    innerHTML: `Segitiga: <b>${tris.toLocaleString('id-ID')}</b> · Titik: <b>${verts.size.toLocaleString('id-ID')}</b><br>Material dipakai: <b>${mats.size}</b> · Tekstur impor: <b>${texN}</b><br>Komponen: <b>${defs.size}</b> jenis, <b>${gs.filter((g) => g.def).length}</b> buah`,
+  }));
+  if (model.faces.length > 150000) P.append(mkEl('div', { className: 'warn small', textContent: '⚠ Model berat: pertimbangkan Bersihkan Model, sembunyikan bagian yang tidak dikerjakan, atau pakai Isolasi (I).' }));
+  // objek teratas paling berat
+  const per = new Map();
+  for (const f of model.faces) {
+    let g = f.group ?? null;
+    while (g != null && model.groups[g]?.parent != null) g = model.groups[g].parent;
+    if (g != null) per.set(g, (per.get(g) || 0) + 1);
+  }
+  const top = [...per].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  if (top.length > 1) {
+    P.append(mkEl('div', { className: 'small muted', style: 'margin-top:6px', textContent: 'Objek terberat:' }));
+    for (const [g, n] of top)
+      P.append(mkEl('div', { className: 'statrow' }, mkEl('span', { textContent: model.groups[g].name }), mkEl('b', { textContent: n.toLocaleString('id-ID') }),
+        mkEl('button', { textContent: 'Pilih', onclick: () => { selection = G.entitiesInTree(model, g); refresh(); updateInfo(); zoomSelection(); } })));
+  }
+  const sizeEl = mkEl('span', { className: 'small muted' });
+  P.append(mkEl('div', { className: 'btnrow' },
+    mkEl('button', { textContent: 'Hitung ukuran berkas', onclick: () => { sizeEl.textContent = `≈ ${(serializeProject().length / 1048576).toFixed(1)} MB`; } }),
+    mkEl('button', { textContent: 'Bersihkan Model…', onclick: openClean }), sizeEl));
+}
+
+// ---- Tampilan 4 jendela: perspektif (kiri atas, interaktif) + Atas, Depan, Kanan (paralel) ----
+const QUAD_VIEWS = [
+  { name: 'Atas', dir: [0, 0, 1], up: [0, 1, 0], col: 1, row: 0 },
+  { name: 'Depan', dir: [0, -1, 0], up: [0, 0, 1], col: 0, row: 1 },
+  { name: 'Kanan', dir: [1, 0, 0], up: [0, 0, 1], col: 1, row: 1 },
+];
+function toggleQuad() {
+  if (quad) {
+    quad.r.dispose();
+    quad.el.remove();
+    quad.labels.forEach((l) => l.remove());
+    quad = null;
+    stage.classList.remove('quad');
+    return;
+  }
+  stage.classList.add('quad');
+  const el = mkEl('canvas', { id: 'quadView' });
+  stage.insertBefore(el, canvas);
+  const r = new THREE.WebGLRenderer({ canvas: el, antialias: true, alpha: true });
+  r.setClearColor(0x000000, 0);
+  r.localClippingEnabled = true;
+  const views = QUAD_VIEWS.map((v) => ({ ...v, cam: new THREE.OrthographicCamera(-1, 1, 1, -1, -5000, 5000), c: new THREE.Vector3(), hh: 5 }));
+  const labels = views.map((v) => {
+    const l = mkEl('div', { className: 'quadlbl', textContent: v.name, title: 'Klik ganda: zoom semua', style: `left:calc(${v.col * 50}% + 8px);top:calc(${v.row * 50}% + ${v.row ? 6 : 44}px)` });
+    stage.append(l);
+    return l;
+  });
+  quad = { r, el, views, labels, drag: null };
+  el.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const v = quadAt(e);
+    if (!v) return;
+    const before = quadWorld(v, e);
+    v.hh = Math.max(0.05, Math.min(5000, v.hh * Math.exp(e.deltaY * 0.0012)));
+    v.c.add(before.sub(quadWorld(v, e)));
+    requestRender();
+  }, { passive: false });
+  el.addEventListener('pointerdown', (e) => {
+    const v = quadAt(e);
+    if (!v) return;
+    quad.drag = { v, x: e.clientX, y: e.clientY };
+    el.setPointerCapture(e.pointerId);
+  });
+  el.addEventListener('pointermove', (e) => {
+    const d = quad && quad.drag;
+    if (!d) return;
+    const k = (2 * d.v.hh) / quadSize().h;
+    const cam = d.v.cam, right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0), up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
+    d.v.c.addScaledVector(right, -(e.clientX - d.x) * k).addScaledVector(up, (e.clientY - d.y) * k);
+    d.x = e.clientX;
+    d.y = e.clientY;
+    requestRender();
+  });
+  el.addEventListener('pointerup', () => quad && (quad.drag = null));
+  el.addEventListener('dblclick', (e) => { const v = quadAt(e); v && quadFit(v); });
+  views.forEach(quadFit);
+  toast('Tampilan 4 jendela: kerja di kiri atas; roda = zoom, seret = geser, klik ganda = zoom semua');
+}
+const quadSize = () => ({ w: stage.clientWidth / 2, h: stage.clientHeight / 2 });
+function quadAt(e) {
+  const r = stage.getBoundingClientRect(), col = e.clientX - r.left > r.width / 2 ? 1 : 0, row = e.clientY - r.top > r.height / 2 ? 1 : 0;
+  return quad.views.find((v) => v.col === col && v.row === row) || null;
+}
+function quadWorld(v, e) {
+  const r = stage.getBoundingClientRect(), { w, h } = quadSize();
+  const nx = ((e.clientX - r.left - v.col * w) / w) * 2 - 1, ny = 1 - ((e.clientY - r.top - v.row * h) / h) * 2;
+  const right = new THREE.Vector3().setFromMatrixColumn(v.cam.matrixWorld, 0), up = new THREE.Vector3().setFromMatrixColumn(v.cam.matrixWorld, 1);
+  return v.c.clone().addScaledVector(right, nx * v.hh * (w / h)).addScaledVector(up, ny * v.hh);
+}
+function quadFit(v) {
+  const box = G.bboxOf(model, null, viewVisible(model));
+  if (box.isEmpty()) box.set(new THREE.Vector3(-5, -5, 0), new THREE.Vector3(5, 5, 3));
+  box.getCenter(v.c);
+  const s = box.getSize(new THREE.Vector3()), { w, h } = quadSize(), asp = w / h;
+  const [a, b] = v.dir[2] ? [s.x, s.y] : v.dir[1] ? [s.x, s.z] : [s.y, s.z];
+  v.hh = Math.max(b / 2, a / 2 / asp, 0.5) * 1.15;
+  requestRender();
+}
+function renderQuad() {
+  const { r } = quad, W = stage.clientWidth, H = stage.clientHeight, w = W / 2, h = H / 2;
+  if (r.domElement.width !== Math.round(W * window.devicePixelRatio) || r.domElement.height !== Math.round(H * window.devicePixelRatio)) {
+    r.setPixelRatio(window.devicePixelRatio);
+    r.setSize(W, H, false);
+  }
+  r.toneMapping = renderer.toneMapping;
+  r.toneMappingExposure = renderer.toneMappingExposure;
+  r.clippingPlanes = renderer.clippingPlanes;
+  r.setScissorTest(true);
+  r.setViewport(0, 0, W, H);
+  r.setScissor(0, 0, W, H);
+  r.clear();
+  const grids = grid.visible;
+  for (const v of quad.views) {
+    const cam = v.cam, asp = w / h;
+    Object.assign(cam, { left: -v.hh * asp, right: v.hh * asp, top: v.hh, bottom: -v.hh });
+    cam.up.fromArray(v.up);
+    cam.position.copy(v.c).addScaledVector(new THREE.Vector3().fromArray(v.dir), 2000);
+    cam.lookAt(v.c);
+    cam.updateProjectionMatrix();
+    cam.updateMatrixWorld();
+    const x = v.col * w, y = v.row ? 0 : h; // koordinat WebGL dihitung dari bawah
+    r.setScissor(x, y, w, h);
+    r.setViewport(x, y, w, h);
+    grid.visible = grids && v.dir[2] === 1; // grid tanah hanya berguna di tampak atas
+    r.render(scene, cam);
+  }
+  grid.visible = grids;
+  r.setScissorTest(false);
+}
+
+// ---- Tema gelap ----
+function setTheme(dark, quiet = false) {
+  document.body.classList.toggle('dark', dark);
+  try {
+    localStorage.setItem('sketchclone.theme', dark ? 'dark' : 'light');
+  } catch {}
+  window.api.setTheme && window.api.setTheme(dark ? 'dark' : 'light');
+  if (!quiet) toast(dark ? 'Tema gelap' : 'Tema terang');
+}
+try {
+  if (localStorage.getItem('sketchclone.theme') === 'dark') setTheme(true, true);
+} catch {}
+
+// ======================= Animasi (timeline + keyframe) =======================
+// Saat diputar/digeser, objek beranimasi digambar terpisah (grup THREE sendiri) dan hanya matriksnya yang diubah
+// tiap bingkai, jadi tetap lancar di model besar. Saat berhenti, pose kaku pada waktu itu diterapkan ke model
+// (tanpa riwayat) supaya objek bisa diedit lalu diberi kunci baru — seperti Blender.
+const animRoot = new THREE.Group();
+scene.add(animRoot);
+const ANIM_FPS = 30;
+const depthOf = (g) => { let d = 0; for (let x = model.groups[g]?.parent; x != null; x = model.groups[x]?.parent) d++; return d; };
+const subModel = (ids) => ({ ...model, faces: model.faces.filter((f) => ids.has(f.id)), lines: model.lines.filter((l) => ids.has(l.id)) });
+const libOfFace = (f) => (f.group != null ? f.group : null);
+
+function animPrepare() {
+  if (animView) return animView;
+  AN.pruneAnim(model);
+  const A = AN.animOf(model), gids = AN.animatedGids(model).sort((a, b) => depthOf(a) - depthOf(b));
+  const owner = new Map();
+  for (const gid of gids) for (const id of G.entitiesInTree(model, gid)) owner.set(id, gid);
+  ignoreAnimHidden = true;
+  rebuild(model, { exclude: new Set(owner.keys()) });
+  const units = [];
+  const mkPart = (ids, kind, extra = {}) => {
+    const obj = new THREE.Group();
+    obj.matrixAutoUpdate = false;
+    animRoot.add(obj);
+    rebuild(subModel(ids), { target: obj, partial: true });
+    return { obj, kind, ...extra };
+  };
+  for (const gid of gids) {
+    const ids = new Set([...owner].filter(([, g]) => g === gid).map(([id]) => id));
+    const tr = A.tracks[gid], parts = [];
+    if (tr.buka?.length) for (const lf of AN.hingeLeaves(model, gid)) {
+      lf.ids.forEach((i) => ids.delete(i));
+      parts.push(mkPart(lf.ids, 'daun', { hinge: lf.hinge, axis: lf.axis, sign: lf.sign * (tr.bukaArah || 1) }));
+    }
+    for (const w of AN.wheelSets(model, ids)) {
+      w.ids.forEach((i) => ids.delete(i));
+      const rest = new THREE.Matrix4().fromArray(model.groups[w.lib].m);
+      parts.push(mkPart(w.ids, 'roda', { lib: w.lib, roda: w.roda, invRest: rest.clone().invert(), tb: AN.motionTable(model, w.lib, A.dur, ANIM_FPS, w.roda.ax, w.roda.r) }));
+    }
+    // figur manusia: kulit mengikuti tulang (GPU skinning)
+    const figs = new Map();
+    for (const f of model.faces) if (ids.has(f.id) && AN.isFigure(model.groups[libOfFace(f)])) {
+      const k = libOfFace(f);
+      if (!figs.has(k)) figs.set(k, new Set());
+      figs.get(k).add(f.id);
+    }
+    for (const [lib, fids] of figs) {
+      const ftr = A.tracks[lib];
+      if (!ftr?.aksi?.length) continue;
+      fids.forEach((i) => ids.delete(i));
+      parts.push(makeSkinPart(lib, fids, mkPart));
+    }
+    if (ids.size) parts.push(mkPart(ids, 'badan'));
+    units.push({ gid, parts, invRest: new THREE.Matrix4().fromArray(model.groups[gid].m).invert() });
+  }
+  ignoreAnimHidden = false;
+  animView = { units };
+  return animView;
+}
+
+function makeSkinPart(lib, fids, mkPart) {
+  const rest = new THREE.Matrix4().fromArray(model.groups[lib].m), inv = rest.clone().invert();
+  const local = [];
+  for (const f of model.faces) if (fids.has(f.id)) for (const p of f.pts) local.push(V3(p).applyMatrix4(inv).toArray());
+  const rig = AN.figureRig(local);
+  const part = mkPart(fids, 'figur', { lib, rig, invRest: inv });
+  // tulang dalam ruang lokal figur, di bawah wadah bermatriks pose diam
+  const rigRoot = new THREE.Object3D();
+  rigRoot.matrixAutoUpdate = false;
+  rigRoot.matrix.copy(rest);
+  part.obj.add(rigRoot);
+  const bones = AN.BONES.map(() => new THREE.Bone());
+  bones.forEach((b, i) => {
+    const pi = AN.BONE_PARENT[i], p = new THREE.Vector3(...rig.pos[i]);
+    if (pi >= 0) p.sub(new THREE.Vector3(...rig.pos[pi]));
+    b.position.copy(p);
+    (pi >= 0 ? bones[pi] : rigRoot).add(b);
+  });
+  part.obj.updateMatrixWorld(true);
+  const skel = new THREE.Skeleton(bones);
+  const swap = [];
+  part.obj.traverse((o) => {
+    if (o.isLine || o.isLineSegments || o.isLine2 || o.type === 'LineSegments2') o.visible = false;
+    else if (o.isMesh && !o.isSkinnedMesh) swap.push(o);
+  });
+  for (const o of swap) {
+    const g = o.geometry, pos = g.attributes.position, n = pos.count, tri = o.userData.triFace || [];
+    const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4), v = new THREE.Vector3();
+    // golongan tulang per bidang (label bagian tubuh dari manusia.js, dinilai di titik tengah bidang)
+    const hints = new Map();
+    const hintOf = (id) => {
+      if (!hints.has(id)) {
+        const f = faceById(id);
+        const c = f ? f.pts.reduce((a, p) => a.add(V3(p)), new THREE.Vector3()).divideScalar(f.pts.length).applyMatrix4(inv) : null;
+        hints.set(id, f && c ? AN.boneHint(f.bp, rig, c.x, c.y, c.z) : null);
+      }
+      return hints.get(id);
+    };
+    for (let i = 0; i < n; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(inv);
+      const s = AN.skinWeights(rig, v.x, v.y, v.z, hintOf(tri[Math.floor(i / 3)]));
+      si.set(s.idx, i * 4);
+      sw.set(s.wt, i * 4);
+    }
+    g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
+    g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+    // material fisik (kulit/rambut) + skinning terlalu berat bagi sebagian GPU: pakai versi Standard yang setara
+    let mat = o.material;
+    if (mat.isMeshPhysicalMaterial) {
+      const q = mat;
+      mat = new THREE.MeshStandardMaterial({ color: q.color, map: q.map, normalMap: q.normalMap, normalScale: q.normalScale, roughness: q.roughness, metalness: q.metalness, vertexColors: q.vertexColors, transparent: q.transparent, opacity: q.opacity, side: q.side, polygonOffset: q.polygonOffset, polygonOffsetFactor: q.polygonOffsetFactor, polygonOffsetUnits: q.polygonOffsetUnits, clippingPlanes: q.clippingPlanes, depthWrite: q.depthWrite, alphaTest: q.alphaTest });
+    }
+    const sm = new THREE.SkinnedMesh(g, mat);
+    sm.renderOrder = o.renderOrder;
+    sm.frustumCulled = false;
+    sm.castShadow = o.castShadow;
+    sm.receiveShadow = o.receiveShadow;
+    o.parent.add(sm);
+    o.parent.remove(o);
+    sm.updateMatrixWorld(true);
+    sm.bind(skel);
+  }
+  part.bones = bones;
+  part.rest = bones.map((b) => b.position.clone());
+  return part;
+}
+
+const aboutAxis = (c, ax, a) => new THREE.Matrix4().makeTranslation(c.x, c.y, c.z).multiply(new THREE.Matrix4().makeRotationAxis(ax, a)).multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z));
+function animApply(t) {
+  const V = animPrepare(), A = AN.animOf(model), cache = new Map();
+  for (const u of V.units) {
+    const P = AN.poseAt(model, u.gid, t, cache), D = P.W.clone().multiply(u.invRest);
+    for (const p of u.parts) {
+      let M = D;
+      if (p.kind === 'daun') M = D.clone().multiply(aboutAxis(p.hinge, p.axis, (p.sign * AN.hingeDeg(A.tracks[u.gid], t) * Math.PI) / 180));
+      else if (p.kind === 'roda') {
+        const c = new THREE.Vector3(...p.roda.c), ax = new THREE.Vector3(...p.roda.ax);
+        M = AN.poseAt(model, p.lib, t, cache).W.clone().multiply(aboutAxis(c, ax, p.tb.at(p.tb.ang, t))).multiply(p.invRest);
+      } else if (p.kind === 'figur') {
+        M = AN.poseAt(model, p.lib, t, cache).W.clone().multiply(p.invRest);
+        poseFigure(p, A.tracks[p.lib], t);
+      }
+      p.obj.matrix.copy(M);
+      p.obj.matrixWorldNeedsUpdate = true;
+      p.obj.visible = P.vis;
+    }
+  }
+  const cv = AN.cameraAt(model, t);
+  if (cv) {
+    view.target.copy(cv.target);
+    Object.assign(view, { dist: cv.dist, az: cv.az, el: cv.el });
+    updateCamera();
+  }
+  requestRender();
+  updateTimeline();
+}
+// fase langkah dari jarak tempuh (kaki tidak "meluncur"); diam di tempat = langkah berbasis waktu
+function poseFigure(p, tr, t) {
+  if (!p.phase) {
+    const tb = AN.motionTable(model, p.lib, AN.animOf(model).dur, ANIM_FPS), n = tb.dist.length, ph = new Float32Array(n);
+    const cycle = 1.45 * (p.rig.H / 1.7);
+    for (let i = 1; i < n; i++) {
+      const dd = tb.dist[i] - tb.dist[i - 1], walking = (tr.aksi || []).some((a) => a.a === 'jalan' && i / ANIM_FPS >= a.t0 && i / ANIM_FPS <= a.t1);
+      ph[i] = ph[i - 1] + (dd * ANIM_FPS > 0.15 ? (dd / cycle) * 2 * Math.PI : walking ? (2 * Math.PI * 0.9) / ANIM_FPS : 0);
+    }
+    p.phase = (tt) => tb.at(ph, tt);
+  }
+  const pose = AN.figurePose(tr.aksi, t, p.phase(t));
+  p.bones.forEach((b, i) => b.rotation.set(...pose.rot[i]));
+  p.bones[0].position.copy(p.rest[0]).add(new THREE.Vector3(0, 0, -pose.drop * p.rig.H));
+}
+
+function animTeardown() {
+  if (!animView) return;
+  for (const c of [...animRoot.children]) {
+    disposeGroup(c);
+    animRoot.remove(c);
+  }
+  animView = null;
+}
+// Terapkan pose kaku waktu t ke geometri model (tanpa riwayat), lalu kembali ke tampilan biasa
+function animCommit(t) {
+  const gids = AN.animatedGids(model).sort((a, b) => depthOf(a) - depthOf(b)), cache = new Map();
+  const poses = gids.map((g) => [g, AN.poseAt(model, g, t, cache)]);
+  for (const [gid, P] of poses) {
+    const g = model.groups[gid], D = P.W.clone().multiply(new THREE.Matrix4().fromArray(g.m).invert());
+    const e = D.elements;
+    if (e.some((v, i) => Math.abs(v - (i % 5 === 0 ? 1 : 0)) > 1e-9)) G.applyMatrix(model, G.entitiesInTree(model, gid), D);
+    if (P.vis) delete g.animHidden;
+    else g.animHidden = true;
+  }
+  animTeardown();
+  snapCache = null;
+  refresh();
+  updateInfo();
+}
+function animSeek(t, live = true) {
+  const A = AN.animOf(model);
+  animT = Math.max(0, Math.min(A.dur, t));
+  if (live) animApply(animT);
+  else animCommit(animT);
+  updateTimeline();
+}
+function animPlayToggle(fromStart = false) {
+  if (animPlaying) return animPause();
+  const A = AN.animOf(model);
+  if (fromStart || animT >= A.dur - 1e-3) animT = 0;
+  cancelTool();
+  animPrepare();
+  const t0 = performance.now() - animT * 1000;
+  animPlaying = { raf: 0 };
+  const step = () => {
+    if (!animPlaying) return;
+    let t = (performance.now() - t0) / 1000;
+    if (t >= A.dur) {
+      if (animLoop && !animPlaying.rec) return animPlayToggleRestart();
+      animT = A.dur;
+      animApply(A.dur);
+      const done = animPlaying.done;
+      animPause();
+      done && done();
+      return;
+    }
+    animT = t;
+    animApply(t);
+    animPlaying.raf = requestAnimationFrame(step);
+  };
+  animPlaying.raf = requestAnimationFrame(step);
+  updateTimeline();
+}
+function animPlayToggleRestart() {
+  animPlaying = null;
+  animT = 0;
+  animPlayToggle();
+}
+function animPause() {
+  if (animPlaying) cancelAnimationFrame(animPlaying.raf);
+  animPlaying = null;
+  animCommit(animT);
+  updateTimeline();
+}
+async function animRecord() {
+  const A = AN.animOf(model);
+  if (!AN.animatedGids(model).length && AN.animOf(model).cam.mode === 'bebas') return toast('Belum ada animasi: beri kunci pada objek atau kamera dulu');
+  if (!window.MediaRecorder) return toast('Perekam video tidak tersedia');
+  if (animPlaying) animPause();
+  const stream = canvas.captureStream(ANIM_FPS);
+  const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
+  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 10_000_000 });
+  const chunks = [];
+  rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  const stopped = new Promise((r) => (rec.onstop = r));
+  toast(`Merekam video ${A.dur.toFixed(1)} detik…`);
+  animT = 0;
+  animPrepare();
+  animApply(0);
+  await new Promise((r) => setTimeout(r, 150));
+  rec.start(200);
+  await new Promise((r) => {
+    animPlayToggle(true);
+    animPlaying.rec = true;
+    animPlaying.done = r;
+  });
+  rec.stop();
+  await stopped;
+  const bytes = new Uint8Array(await new Blob(chunks, { type: 'video/webm' }).arrayBuffer());
+  const base = filePath ? filePath.split(/[\\/]/).pop().replace(/\.skc$/, '') : 'animasi';
+  const out = await window.api.exportBinary('webm', bytes, base + '-animasi.webm');
+  out && toast('Video animasi disimpan (.webm, bisa diputar di browser/VLC)');
+}
+
+// ---- kunci ----
+const fmtT = (t) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`;
+function selTopGroups() {
+  const { tops } = selectedTops();
+  return [...tops];
+}
+function animKeySel(vis = true) {
+  const gs = selTopGroups();
+  if (!gs.length) return toast('Pilih grup/komponen yang ingin dianimasikan (benda lepas: jadikan grup dulu, Ctrl+G)');
+  const A = AN.animOf(model);
+  for (const g of gs) {
+    const tr = (A.tracks[g] ||= {});
+    tr.keys ||= [];
+    // kunci pertama di waktu > 0: tambahkan juga kunci awal di 0 agar objek diam sebelum bergerak
+    if (!tr.keys.length && animT > 0.01) AN.setKey(tr.keys, { t: 0, m: AN.relMat(model, g).toArray(), vis: true, ease: animEase });
+    AN.setKey(tr.keys, { t: +animT.toFixed(3), m: AN.relMat(model, g).toArray(), vis, ease: animEase });
+  }
+  changed();
+  toast(`Kunci ${vis ? '' : '(sembunyi) '}di ${fmtT(animT)} untuk ${gs.length} objek`);
+}
+function animDelKeySel() {
+  const A = AN.animOf(model);
+  let n = 0;
+  for (const g of selTopGroups()) {
+    const tr = A.tracks[g];
+    if (!tr?.keys) continue;
+    const before = tr.keys.length;
+    tr.keys = tr.keys.filter((k) => Math.abs(k.t - animT) > 1 / 60);
+    n += before - tr.keys.length;
+  }
+  if (!n) return toast(`Tidak ada kunci di ${fmtT(animT)} pada objek terpilih`);
+  changed();
+  toast(`${n} kunci dihapus`);
+}
+function animCamKey() {
+  const A = AN.animOf(model);
+  A.cam.mode = 'kunci';
+  A.cam.keys ||= [];
+  AN.setKey(A.cam.keys, { t: +animT.toFixed(3), c: { target: view.target.toArray(), dist: view.dist, az: view.az, el: view.el }, ease: animEase });
+  changed();
+  toast(`Kunci kamera di ${fmtT(animT)} (${A.cam.keys.length} kunci)`);
+}
+
+// ---- timeline ----
+function buildTimeline() {
+  if ($('timeline')) return;
+  const tl = mkEl('div', { id: 'timeline', hidden: true },
+    mkEl('button', { id: 'tlStart', title: 'Ke awal', innerHTML: '⏮', onclick: () => { if (animPlaying) animPause(); animSeek(0, false); } }),
+    mkEl('button', { id: 'tlPlay', title: 'Putar / jeda (Ctrl+Spasi)', innerHTML: '▶', onclick: () => animPlayToggle() }),
+    mkEl('span', { id: 'tlTime', textContent: '0:00.0' }),
+    mkEl('div', { id: 'tlTrack' }, mkEl('input', { id: 'tlSlider', type: 'range', min: 0, max: 10, step: 1 / ANIM_FPS, value: 0 }), mkEl('div', { id: 'tlMarks' })),
+    mkEl('span', { id: 'tlDur' }),
+    mkEl('button', { title: 'Sisipkan kunci untuk objek terpilih (posisi, putaran, ukuran)', textContent: '◆ Kunci', onclick: () => animKeySel() }),
+    mkEl('button', { title: 'Sisipkan kunci kamera (sudut pandang sekarang)', textContent: '🎥 Kunci', onclick: animCamKey }),
+    mkEl('label', { title: 'Ulangi terus' }, mkEl('input', { type: 'checkbox', onchange: (e) => (animLoop = e.target.checked) }), '↻'),
+    mkEl('button', { title: 'Tutup timeline', textContent: '✕', onclick: () => toggleTimeline(false) }));
+  stage.append(tl);
+  const sl = $('tlSlider');
+  sl.addEventListener('pointerdown', () => animPlaying && animPause());
+  sl.addEventListener('input', () => animSeek(+sl.value, true));
+  sl.addEventListener('change', () => animSeek(+sl.value, false));
+}
+function toggleTimeline(on = $('timeline')?.hidden ?? true) {
+  buildTimeline();
+  $('timeline').hidden = !on;
+  stage.classList.toggle('has-tl', on);
+  if (!on && animPlaying) animPause();
+  updateTimeline();
+}
+function updateTimeline() {
+  const tl = $('timeline');
+  if (!tl || tl.hidden) return;
+  const A = AN.animOf(model), sl = $('tlSlider');
+  sl.max = A.dur;
+  if (document.activeElement !== sl || animPlaying) sl.value = animT;
+  $('tlTime').textContent = fmtT(animT);
+  $('tlDur').textContent = '/ ' + fmtT(A.dur);
+  $('tlPlay').innerHTML = animPlaying ? '⏸' : '▶';
+  // penanda kunci: objek terpilih (oranye) & kamera (biru)
+  const marks = $('tlMarks');
+  const sel = new Set(selection.size ? selTopGroups() : []), ts = new Map();
+  for (const [g, tr] of Object.entries(A.tracks)) {
+    if (sel.size && !sel.has(+g)) continue;
+    for (const k of tr.keys || []) ts.set(k.t.toFixed(2), 'obj');
+    for (const k of tr.buka || []) ts.set(k.t.toFixed(2), 'obj');
+    for (const a of tr.aksi || []) ts.set(a.t0.toFixed(2), 'obj');
+  }
+  if (A.cam.mode === 'kunci') for (const k of A.cam.keys || []) ts.set(k.t.toFixed(2) + 'c', 'cam');
+  const sig = [...ts].join('|') + A.dur;
+  if (marks.dataset.sig === sig) return;
+  marks.dataset.sig = sig;
+  marks.replaceChildren(...[...ts].map(([k, kind]) => {
+    const t = parseFloat(k);
+    return mkEl('i', { className: kind, style: `left:${(t / A.dur) * 100}%`, title: fmtT(t), onclick: () => animSeek(t, false) });
+  }));
+}
+
+// ---- panel Animasi ----
+function renderAnimPane() {
+  const P = $('pane-anim');
+  if (!P) return;
+  P.replaceChildren();
+  const A = AN.animOf(model);
+  const btn = (t, fn, o = {}) => mkEl('button', { textContent: t, onclick: fn, ...o });
+  const num = (v, set, o = {}) => mkEl('input', { value: String(+(+v).toFixed(2)), onchange: (e) => { const x = parseFloat(String(e.target.value).replace(',', '.')); if (Number.isFinite(x)) set(x); }, ...o });
+  P.append(mkEl('div', { className: 'ttl', textContent: 'Animasi' }),
+    mkEl('div', { className: 'muted small', textContent: 'Gerakkan objek di waktu tertentu lalu tekan ◆ Kunci — gerakan di antara kunci diisi otomatis. Putar dengan ▶ atau Ctrl+Spasi.' }),
+    mkEl('div', { className: 'btnrow' }, btn($('timeline') && !$('timeline').hidden ? 'Sembunyikan timeline' : 'Tampilkan timeline', () => { toggleTimeline(); renderAnimPane(); }), btn('▶ Putar', () => { toggleTimeline(true); animPlayToggle(true); })),
+    trow('Durasi (detik)', num(A.dur, (x) => { A.dur = Math.max(0.5, Math.min(600, x)); changed(); })),
+    trow('Transisi kunci', mkEl('select', { onchange: (e) => (animEase = e.target.value) }, ...Object.entries(AN.EASE_NAMES).map(([v, l]) => mkEl('option', { value: v, textContent: l, selected: v === animEase })))));
+
+  // objek terpilih
+  const gs = selection.size ? selTopGroups() : [];
+  P.append(mkEl('div', { className: 'ttl', style: 'margin-top:12px', textContent: gs.length ? `Objek terpilih (${gs.length})` : 'Objek terpilih' }));
+  if (!gs.length) P.append(mkEl('div', { className: 'muted small', textContent: 'Pilih grup/komponen untuk memberi kunci, lintasan, aksi figur, atau buka-tutup pintu.' }));
+  else {
+    P.append(mkEl('div', { className: 'btnrow' },
+      btn(`◆ Kunci di ${fmtT(animT)}`, () => animKeySel()),
+      btn('Sembunyi mulai sini', () => animKeySel(false)),
+      btn('Hapus kunci di sini', animDelKeySel)));
+    const lines = model.lines.filter((l) => selection.has(l.id) && topOf(l) == null);
+    const g0 = gs[0], g = model.groups[g0], tr = A.tracks[g0] || {};
+    // lintasan
+    const pathBox = mkEl('div', { className: 'abox' }, mkEl('b', { textContent: 'Jalan di lintasan' }));
+    if (tr.path) pathBox.append(mkEl('div', { className: 'small', textContent: `Lintasan ${tr.path.pts.length} titik, ${fmtT(tr.path.t0)} → ${fmtT(tr.path.t1)}` }),
+      mkEl('div', { className: 'btnrow' },
+        btn('Balik arah depan', () => { tr.path.fwd = tr.path.fwd.map((v) => -v); changed(); }),
+        btn('Hapus lintasan', () => { delete tr.path; changed(); })),
+      trow('Mulai (s)', num(tr.path.t0, (x) => { tr.path.t0 = x; changed(); })), trow('Selesai (s)', num(tr.path.t1, (x) => { tr.path.t1 = x; changed(); })));
+    else pathBox.append(mkEl('div', { className: 'muted small', textContent: lines.length ? `${lines.length} garis ikut terpilih — siap dipakai sebagai lintasan.` : 'Gambar lintasan dengan alat Garis/Kurva, lalu Shift+klik garisnya bersama objek ini.' }),
+      btn(`Pakai garis terpilih (mulai ${fmtT(animT)})`, () => animPathSel(g0, lines), { disabled: !lines.length }));
+    P.append(pathBox);
+    // pintu / jendela
+    if (g.opening) {
+      const ob = mkEl('div', { className: 'abox' }, mkEl('b', { textContent: g.opening.type === 'pintu' ? 'Daun pintu' : 'Daun jendela' }));
+      ob.append(mkEl('div', { className: 'btnrow' },
+        btn(`Buka di ${fmtT(animT)}`, () => animHinge(g0, 85)), btn(`Tutup di ${fmtT(animT)}`, () => animHinge(g0, 0)),
+        btn('Balik arah buka', () => { (A.tracks[g0] ||= {}).bukaArah = -((A.tracks[g0].bukaArah) || 1); changed(); toast('Arah buka dibalik'); })));
+      if (tr.buka?.length) ob.append(mkEl('div', { className: 'small muted', textContent: tr.buka.map((k) => `${fmtT(k.t)}: ${k.deg}°`).join(' · ') }), btn('Hapus buka-tutup', () => { delete tr.buka; changed(); }));
+      P.append(ob);
+    }
+    // figur
+    const fig = AN.isFigure(g) ? g0 : null;
+    if (fig != null) {
+      const fb = mkEl('div', { className: 'abox' }, mkEl('b', { textContent: 'Gerak figur (tulang)' }));
+      const sel = mkEl('select', {}, ...Object.entries(AN.ACTIONS).map(([v, l]) => mkEl('option', { value: v, textContent: l })));
+      const len = mkEl('input', { value: '4' });
+      fb.append(trow('Aksi', sel), trow('Lama (s)', len), btn(`Tambah mulai ${fmtT(animT)}`, () => {
+        const d = parseFloat(String(len.value).replace(',', '.')) || 4, t = (A.tracks[fig] ||= {});
+        (t.aksi ||= []).push({ a: sel.value, t0: +animT.toFixed(3), t1: +(animT + d).toFixed(3) });
+        t.aksi.sort((p, q) => p.t0 - q.t0);
+        A.dur = Math.max(A.dur, animT + d);
+        changed();
+        toast(`${AN.ACTIONS[sel.value]} ${fmtT(animT)} – ${fmtT(animT + d)}${sel.value === 'jalan' ? ' (beri lintasan agar figur berpindah)' : ''}`);
+      }));
+      for (const [i, a] of (tr.aksi || []).entries())
+        fb.append(mkEl('div', { className: 'statrow' }, mkEl('span', { textContent: `${AN.ACTIONS[a.a]} ${fmtT(a.t0)}–${fmtT(a.t1)}` }), mkEl('b'), btn('Hapus', () => { tr.aksi.splice(i, 1); changed(); })));
+      P.append(fb);
+    }
+  }
+
+  // kamera
+  const cam = A.cam;
+  const cb = mkEl('div', { className: 'abox' }, mkEl('b', { textContent: 'Kamera' }));
+  cb.append(trow('Mode', mkEl('select', { onchange: (e) => { cam.mode = e.target.value; changed(); } },
+    ...[['bebas', 'Bebas (tidak dianimasikan)'], ['kunci', 'Kunci kamera'], ['lintasan', 'Ikuti lintasan (jalan-jalan)'], ['ikuti', 'Mengikuti objek']].map(([v, l]) => mkEl('option', { value: v, textContent: l, selected: cam.mode === v })))));
+  if (cam.mode === 'kunci') cb.append(mkEl('div', { className: 'btnrow' }, btn(`🎥 Kunci di ${fmtT(animT)}`, animCamKey), btn(`Hapus semua (${(cam.keys || []).length})`, () => { cam.keys = []; changed(); })));
+  if (cam.mode === 'lintasan') {
+    const lines = model.lines.filter((l) => selection.has(l.id));
+    cb.append(mkEl('div', { className: 'small muted', textContent: cam.path ? `Lintasan ${cam.path.pts.length} titik` : 'Pilih garis lintasan, lalu tekan tombol di bawah.' }),
+      btn('Pakai garis terpilih', () => {
+        const pts = AN.polylineFromLines(lines);
+        if (!pts || pts.length < 2) return toast('Pilih garis-garis lintasan yang tersambung');
+        cam.path = { pts, h: cam.path?.h ?? 1.6, t0: 0, t1: A.dur, ease: 'halus', look: null };
+        changed();
+        toast('Kamera akan berjalan di lintasan ini');
+      }, { disabled: !lines.length }));
+    if (cam.path) cb.append(trow('Tinggi mata (m)', num(cam.path.h, (x) => { cam.path.h = x; changed(); })),
+      trow('Lihat ke', mkEl('select', { onchange: (e) => { cam.path.look = e.target.value ? +e.target.value : null; changed(); } },
+        mkEl('option', { value: '', textContent: 'Arah jalan' }),
+        ...Object.entries(model.groups).filter(([, g]) => g.parent == null).map(([k, g]) => mkEl('option', { value: k, textContent: g.name, selected: cam.path.look === +k })))));
+  }
+  if (cam.mode === 'ikuti') cb.append(mkEl('div', { className: 'small muted', textContent: cam.follow ? `Mengikuti: ${model.groups[cam.follow.gid]?.name}` : 'Atur sudut pandang, pilih objek, lalu tekan tombol.' }),
+    btn('Ikuti objek terpilih (jarak sekarang)', () => {
+      const g = selTopGroups()[0];
+      if (g == null) return toast('Pilih objek yang diikuti');
+      const P0 = new THREE.Vector3().setFromMatrixPosition(new THREE.Matrix4().fromArray(model.groups[g].m)).add(new THREE.Vector3(0, 0, 0.8));
+      cam.follow = { gid: g, off: camera.position.clone().sub(P0).toArray(), look: [0, 0, 0.8] };
+      changed();
+    }));
+  P.append(cb);
+
+  // siap pakai
+  P.append(mkEl('div', { className: 'abox' }, mkEl('b', { textContent: 'Siap pakai' }),
+    btn('🏗 Animasi tahapan pembangunan', () => {
+      const st = AN.buildStages(model, { per: 1.2 });
+      if (!st.length) return toast('Belum ada grup bangunan (dinding, kolom, atap…)');
+      animT = 0;
+      changed();
+      toggleTimeline(true);
+      animSeek(0, false);
+      toast(`${st.length} tahap: ${st.map((s) => s.name).join(' → ')}. Tekan ▶`);
+    }),
+    mkEl('div', { className: 'small muted', textContent: 'Roda motor/mobil berputar otomatis saat kendaraannya bergerak. Figur manusia: tambah aksi Berjalan + lintasan.' })));
+
+  // daftar
+  const ids = AN.animatedGids(model);
+  P.append(mkEl('div', { className: 'ttl', style: 'margin-top:12px', textContent: `Objek beranimasi (${ids.length})` }));
+  for (const gid of ids) {
+    const tr = A.tracks[gid], bits = [tr.keys?.length && `${tr.keys.length} kunci`, tr.path && 'lintasan', tr.aksi?.length && `${tr.aksi.length} aksi`, tr.buka?.length && 'buka-tutup'].filter(Boolean);
+    P.append(mkEl('div', { className: 'statrow' }, mkEl('span', { textContent: `${model.groups[gid].name} · ${bits.join(', ')}` }),
+      btn('Pilih', () => { selection = G.entitiesInTree(model, gid); refresh(); updateInfo(); }),
+      btn('Hapus', () => { delete A.tracks[gid]; delete model.groups[gid].animHidden; changed(); })));
+  }
+  P.append(mkEl('div', { className: 'btnrow', style: 'margin-top:10px' },
+    btn('🎬 Rekam video', animRecord),
+    btn('Kosongkan semua', () => {
+      for (const g of Object.values(model.groups)) delete g.animHidden;
+      model.anim = null;
+      changed();
+      toast('Semua animasi dihapus');
+    })));
+}
+function animPathSel(gid, lines) {
+  const pts = AN.polylineFromLines(lines);
+  if (!pts || pts.length < 2) return toast('Garis lintasan harus tersambung');
+  const A = AN.animOf(model), g = model.groups[gid];
+  if (g.parent != null) return toast('Lintasan hanya untuk objek teratas (bukan isi grup lain)');
+  const base = new THREE.Matrix4().fromArray(g.m);
+  // lintasan dimulai dari ujung yang paling dekat objek
+  const here = new THREE.Vector3().setFromMatrixPosition(base);
+  if (V3(pts[pts.length - 1]).distanceTo(here) < V3(pts[0]).distanceTo(here)) pts.reverse();
+  let len = 0;
+  for (let i = 1; i < pts.length; i++) len += V3(pts[i]).distanceTo(V3(pts[i - 1]));
+  const speed = AN.isFigure(g) ? 1.3 : /kendaraan_|mobil/.test(g.def || '') ? 6 : 2;
+  const t0 = +animT.toFixed(3), t1 = +(t0 + Math.max(1, len / speed)).toFixed(2);
+  (A.tracks[gid] ||= {}).path = { pts, t0, t1, ease: 'halus', fwd: /lib:mobil/.test(g.def || '') ? [1, 0, 0] : [0, -1, 0], base: base.toArray() };
+  A.dur = Math.max(A.dur, t1 + 0.5);
+  if (AN.isFigure(g) && !(A.tracks[gid].aksi || []).some((a) => a.a === 'jalan')) (A.tracks[gid].aksi ||= []).push({ a: 'jalan', t0, t1 });
+  // garis lintasan disembunyikan supaya tidak ikut terekam
+  lines.forEach((l) => (l.hidden = true));
+  selection = G.entitiesInTree(model, gid);
+  changed();
+  toast(`Lintasan ${len.toFixed(1)} m, ${fmtT(t0)} → ${fmtT(t1)}${AN.isFigure(g) ? ' (figur berjalan)' : ''}`);
+}
+function animHinge(gid, deg) {
+  const A = AN.animOf(model), tr = (A.tracks[gid] ||= {});
+  tr.buka ||= [];
+  const cur = AN.hingeDeg(tr, animT);
+  tr.buka = tr.buka.filter((k) => k.t < animT - 1e-3 || k.t > animT + 1.2);
+  tr.buka.push({ t: +animT.toFixed(3), deg: +cur.toFixed(1) }, { t: +(animT + 1.2).toFixed(3), deg });
+  tr.buka.sort((a, b) => a.t - b.t);
+  A.dur = Math.max(A.dur, animT + 1.5);
+  changed();
+  toast(deg ? 'Daun dibuka dalam 1,2 detik' : 'Daun ditutup dalam 1,2 detik');
 }
 
 // ---- Konsol skrip & plugin (ekstensi) ----
@@ -5175,7 +6739,7 @@ document.querySelectorAll('#trayTabs button').forEach((b) => (b.onclick = () => 
 
 function renderTray() {
   if ($('tray').hidden) return;
-  const fn = { lib: renderLibPane, info: renderInfoPane, mat: renderMatPanel, tags: renderTagsPane, outliner: renderOutliner, scenes: renderScenesPane, styles: renderStylesPane, kons: renderKonsPane, prod: renderProdPane }[trayTab];
+  const fn = { anim: renderAnimPane, lib: renderLibPane, info: renderInfoPane, mat: renderMatPanel, tags: renderTagsPane, outliner: renderOutliner, scenes: renderScenesPane, styles: renderStylesPane, kons: renderKonsPane, prod: renderProdPane }[trayTab];
   fn && fn();
 }
 
@@ -5195,6 +6759,18 @@ function renderLibPane() {
   P.append(mkEl('div', { className: 'ttl', style: 'margin-top:16px', textContent: 'Manusia Realistis (Halus)' }));
   P.append(mkEl('div', { className: 'muted small', textContent: 'Figur berpermukaan halus seperti model Blender (20–35 ribu segitiga, bayangan halus), kulit sawo matang, batik/lurik/sarung, peci & caping. Model .glb/.gltf dari Blender bisa diimpor lewat File → Impor.' }));
   P.append(mkEl('div', { className: 'libgrid' }, ...Object.entries(LIBRARY).filter(([, it]) => it.grp === 'manusia').map(libBtn)));
+  P.append(mkEl('div', { className: 'ttl', style: 'margin-top:16px', textContent: 'Motor Realistis (Halus)' }));
+  P.append(mkEl('div', { className: 'muted small', textContent: 'Matic, bebek, bebek klasik gaya 90-an, sport full-fairing & motor laki khas jalanan Indonesia: bodi lengkung halus mengkilap, velg cor / jari-jari, knalpot, shock berpegas, spion, plat nomor.' }));
+  P.append(mkEl('div', { className: 'libgrid' }, ...Object.entries(LIBRARY).filter(([, it]) => it.grp === 'kendaraan').map(libBtn)));
+  P.append(mkEl('div', { className: 'ttl', style: 'margin-top:16px', textContent: 'Interior Rumah Kampung (Indonesia)' }));
+  P.append(mkEl('div', { className: 'muted small', textContent: 'Perabot jati, kursi plastik, lemari, dipan + kasur kapuk, TV tabung, radio, kipas angin, lampu neon, kalender, jam, kompor + tabung gas 3 kg, galon, ember, gayung, bak mandi, kentongan, jadwal ronda, etalase & rak warung, mimbar, bedug, sepeda onthel, dll.' }));
+  P.append(mkEl('div', { className: 'libgrid' }, ...Object.entries(LIBRARY).filter(([, it]) => it.grp === 'interior').map(libBtn)));
+  P.append(mkEl('div', { className: 'ttl', style: 'margin-top:16px', textContent: 'Kampung Indonesia (Rumah Modular & Fasilitas)' }));
+  P.append(mkEl('div', { className: 'muted small', textContent: 'Dinding bata plester / papan kayu / setengah-setengah (modul 1-2 m), jendela kusen + roster, pintu panel, pintu PVC, lantai teraso/keramik, plafon, atap genteng bergelombang (bidang, bubungan, gevel, limasan), kanopi seng, pos ronda, warung, masjid beratap tumpang, tempat wudu, tiang listrik, lampu jalan, pagar, parit, gorong-gorong, gerobak.' }));
+  P.append(mkEl('div', { className: 'libgrid' }, ...Object.entries(LIBRARY).filter(([, it]) => it.grp === 'kampung').map(libBtn)));
+  P.append(mkEl('div', { className: 'ttl', style: 'margin-top:16px', textContent: 'Desa: Balai, Makam, Sawah & Penggilingan' }));
+  P.append(mkEl('div', { className: 'muted small', textContent: 'Kentongan besar gantung, papan pengumuman, nisan 8 bentuk + kijing, keranda bambu, orang-orangan sawah, patok tanah, roda pintu air, rel & lori tebu.' }));
+  P.append(mkEl('div', { className: 'libgrid' }, ...Object.entries(LIBRARY).filter(([, it]) => it.grp === 'game_penuh').map(libBtn)));
   P.append(mkEl('div', { className: 'ttl', style: 'margin-top:16px', textContent: 'Tokoh Cerita & Properti Kompleks' }));
   P.append(mkEl('div', { className: 'muted small', textContent: 'Satpam, warga, petugas lapangan (rompi, kartu pengenal), tandon menara, tiang listrik, AC outdoor, motor bebek, kursi plastik.' }));
   P.append(mkEl('div', { className: 'libgrid' }, ...Object.entries(LIBRARY).filter(([, it]) => it.grp === 'tokoh' || it.grp === 'kompleks').map(libBtn)));
@@ -5360,6 +6936,7 @@ function renderInfoPane() {
       ...[0, 1, 2, 3, 4].map((v) => mkEl('option', { value: String(v), textContent: v ? '0.' + '0'.repeat(v - 1) + '1' : '1' })));
     ps.value = String(u.prec);
     P.append(trow('Satuan', us), trow('Presisi', ps));
+    infoStats(P);
     return;
   }
   const { tops, loose } = selectedTops();
@@ -5388,15 +6965,8 @@ function renderInfoPane() {
       changed();
     })));
     if (nf) P.append(trow('Luas', mkEl('span', { textContent: fmtArea(loose.filter((e) => e.pts).reduce((a, f) => a + G.faceArea(f), 0)) })));
-    if (nf === 1 && !nl) {
-      const f = loose[0];
-      P.append(trow('Material', mkEl('span', { textContent: f.tex ? textures.get(f.tex)?.name || 'Tekstur' : f.color })));
-    }
   }
-  if (!box.isEmpty()) {
-    const sz = box.getSize(new THREE.Vector3());
-    P.append(trow('Ukuran', mkEl('span', { textContent: `${fmt(sz.x)} × ${fmt(sz.y)} × ${fmt(sz.z)}` })));
-  }
+  infoMeasure(P, ids, loose);
   const tf = selectedTexFaces();
   if (tf.length) {
     const f0 = tf[0];
@@ -5449,6 +7019,8 @@ function renderTagsPane() {
 }
 
 // ---- Outliner ----
+const LOCK_SVG = '<svg viewBox="0 0 16 16" width="12" height="12"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor"/><path d="M5 7V5a3 3 0 0 1 6 0v2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>';
+const UNLOCK_SVG = '<svg viewBox="0 0 16 16" width="12" height="12"><rect x="3" y="7" width="10" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5 7V5a3 3 0 0 1 5.8-1" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>';
 function renderOutliner() {
   const P = $('pane-outliner');
   P.replaceChildren();
@@ -5465,22 +7037,31 @@ function renderOutliner() {
       const on = [...tree].some((i) => selection.has(i));
       const r = mkEl('div', { className: 'orow' + (on ? ' on' : '') + (editGroup === gid ? ' edit' : ''), style: `padding-left:${8 + depth * 14}px` },
         mkEl('button', { className: 'eye', textContent: g.hidden ? '○' : '●', title: g.hidden ? 'Tampilkan' : 'Sembunyikan', onclick: (e) => { e.stopPropagation(); g.hidden = !g.hidden; snapCache = null; changed(); } }),
+        mkEl('button', { className: 'lock' + (g.locked ? ' on' : ''), innerHTML: g.locked ? LOCK_SVG : UNLOCK_SVG, title: g.locked ? 'Buka kunci' : 'Kunci (tidak bisa dipilih/diubah)', onclick: (e) => {
+          e.stopPropagation();
+          g.locked = !g.locked || undefined;
+          if (g.locked) for (const i of tree) selection.delete(i);
+          changed();
+          toast(g.locked ? `"${g.name}" dikunci` : `"${g.name}" bisa diubah lagi`);
+        } }),
         mkEl('span', { className: 'ico', textContent: g.def ? '◈' : '▣' }),
         mkEl('span', { textContent: g.name }));
+      if (g.locked) r.classList.add('locked');
       r.onclick = () => {
+        if ([...tree].some((i) => isLocked(entityOf(i)))) return lockedHit();
         if (editGroup != null && !G.isInTree(model, gid, editGroup)) editGroup = null;
         selection = tree;
         refresh();
         updateInfo();
       };
-      r.ondblclick = () => enterEdit(gid);
+      r.ondblclick = () => !g.locked && enterEdit(gid);
       P.append(r);
       walk(gid, depth + 1);
     }
   };
   walk(null, 0);
   if (!Object.keys(model.groups).length) P.append(mkEl('div', { className: 'muted small', textContent: 'Belum ada grup/komponen. Buat dengan Ctrl+G / Ctrl+Shift+G.' }));
-  else P.append(mkEl('div', { className: 'muted small', textContent: 'Klik: pilih · Klik ganda: edit · ●: tampil/sembunyi' }));
+  else P.append(mkEl('div', { className: 'muted small', textContent: 'Klik: pilih · Klik ganda: edit · ●: tampil/sembunyi · gembok: kunci' }));
 }
 
 // ---- Adegan (Scenes) ----
@@ -5639,6 +7220,7 @@ function renderStylesPane() {
   const lt = mkEl('select', { onchange: (e) => setStyle({ light: e.target.value }) }, mkEl('option', { value: 'day', textContent: 'Siang' }), mkEl('option', { value: 'night', textContent: 'Malam (lampu menyala)' }));
   lt.value = st.light || 'day';
   P.append(trow('Waktu', lt));
+  P.append(trow('Detail kulit & kain', mkEl('input', { type: 'checkbox', checked: st.detail !== false, title: 'Warna halus per titik, kulit bersinar lembut, serat kain, pori kulit, helai rambut (gaya Berbayang)', onchange: (e) => setStyle({ detail: e.target.checked }) })));
   P.append(trow('Bayangan lembut', mkEl('input', { type: 'checkbox', checked: !!st.ao, title: 'Ambient occlusion: bayangan halus di lekukan & sudut', onchange: (e) => setStyle({ ao: e.target.checked }) })));
   const sm = mkEl('select', { onchange: (e) => setStyle({ smooth: +e.target.value }) },
     ...[[0, 'Mati'], [10, '10°'], [20, '20°'], [30, '30°'], [45, '45°']].map(([v, t]) => mkEl('option', { value: String(v), textContent: t })));
@@ -5999,7 +7581,7 @@ function renderView(kind, W, H, pxPerM, box, clip = null) {
   model.style = savedStyle;
   selection = sel;
   renderer.setPixelRatio(pr);
-  renderer.setSize(stage.clientWidth, stage.clientHeight, false);
+  renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
   refresh();
   return { data, cam };
 }
@@ -7448,7 +9030,7 @@ const handleMenu = async (cmd, arg) => {
     case 'undo': undo(); break;
     case 'redo': redo(); break;
     case 'selectAll':
-      selection = new Set([...model.faces.map((f) => f.id), ...model.lines.map((l) => l.id)]);
+      selection = new Set([...model.faces, ...model.lines].filter((e) => !isLocked(e)).map((e) => e.id));
       refresh();
       updateInfo();
       break;
@@ -7472,6 +9054,15 @@ const handleMenu = async (cmd, arg) => {
     case 'exportGlb': await exportGLB(); break;
     case 'fov': persp.fov = arg; updateCamera(); toast(`Bidang pandang ${arg}°`); break;
     case 'hide': hideSelection(); break;
+    case 'palette': openPalette(); break;
+    case 'isolate': toggleIsolate(); break;
+    case 'quad': toggleQuad(); break;
+    case 'timeline': toggleTimeline(); if (!$('timeline').hidden) showTray('anim'); break;
+    case 'animPlay': toggleTimeline(true); animPlayToggle(); break;
+    case 'animRecord': await animRecord(); break;
+    case 'theme': setTheme(!document.body.classList.contains('dark')); break;
+    case 'align': alignSel(arg); break;
+    case 'cleanModel': openClean(); break;
     case 'unhideAll': unhideAll(); break;
     case 'addScene': addScene(); break;
     case 'playScenes': playScenes(); break;
@@ -7697,6 +9288,7 @@ $('keySave').onclick = saveKeys;
 $('keyReset').onclick = () => {
   try {
     localStorage.removeItem('sketchclone.keys');
+    localStorage.removeItem('sketchclone.pie');
   } catch {}
   loadKeys();
   openKeys();
@@ -7732,6 +9324,9 @@ updateInfo();
 // Akses untuk pengujian otomatis.
 window.__sk = {
   solidBoolean: (a, b, op) => booleanSolids(model, a, b, op),
+  animSeek, animPlayToggle, animPause, animKeySel, animCamKey, animHinge, animPathSel, animApply, animCommit, animRecord, toggleTimeline, renderAnimPane, getAnimView: () => animView, getAnimT: () => animT, isPlaying: () => !!animPlaying, AN,
+  brush, ensurePaintLayer, paintCache, clearPaintSel,
+  toggleIsolate, getIsolate: () => isolate, toggleQuad, getQuad: () => quad, setTheme, openPie, getPie: () => pie, runPie, renderInfoPane, alignSel, selUnits, openClean, applyClean, openPalette, getPalShown: () => palShown,
   G,
   project(x, y, z) {
     const s = toScreen(new THREE.Vector3(x, y, z));

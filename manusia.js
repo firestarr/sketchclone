@@ -240,6 +240,7 @@ export function buildManusia(m, s) {
     const f = G.makeFace(m, [a, c, b], n.negate(), hex(col), sid); // urutan titik mesh asal searah jarum jam
     if (!f) continue;
     f.soft = true;
+    f.bp = regOf[i] ? regOf[i][0] : part; // bagian tubuh (A lengan, L kaki, T badan, k kulit, r rambut…) untuk tulang animasi
     if (tex) {
       Object.assign(f, { tex, texScale });
       const ax = axes?.get(regOf[i]);
